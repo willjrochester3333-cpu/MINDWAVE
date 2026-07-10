@@ -375,7 +375,7 @@ for i, (lbl, col) in enumerate(zip(BAND_LABELS[::-1], BAND_COLORS[::-1])):
     hbar_txts.append(t)
 
 # ── Band web ──────────────────────────────────────────────────────────────────
-ax_gravity.set_title("band web  —  mesh stretched toward dominant band", loc="left", pad=5)
+ax_gravity.set_title("band web  —  ball travels to the dominant band's label", loc="left", pad=5)
 ax_gravity.set_xlim(-1.15, 1.15)
 ax_gravity.set_ylim(-1.15, 1.15)
 ax_gravity.set_aspect("equal", adjustable="datalim")
@@ -385,10 +385,12 @@ ax_gravity.set_facecolor(CARD)
 W_N     = len(BAND_KEYS)
 W_RINGS = 4
 W_MAXR  = 0.82
-W_PULL  = 0.85
-W_SPRING = 0.065       # was 0.045 — snappier response to the pull target
-W_DAMP   = 0.90        # was 0.85 — less velocity lost per frame → looser, springier drift
-W_WOBBLE = 0.16         # tangential wander, as a fraction of each node's ring radius
+W_SPRING = 0.065       # mesh nodes: spring pull back toward their home position
+W_DAMP   = 0.90        # mesh nodes: velocity retained per frame (looser = springier drift)
+W_WOBBLE = 0.16        # mesh nodes: tangential wander, as a fraction of ring radius
+W_HUB_REACH  = 0.88    # hub ball: how far out toward the label it travels (fraction of anchor radius)
+W_HUB_SPRING = 0.05    # hub ball: spring pull toward the dominant band's label
+W_HUB_DAMP   = 0.88    # hub ball: velocity retained per frame
 
 def w_anchor(i):
     a = (i / W_N) * math.pi * 2 - math.pi / 2
@@ -448,7 +450,8 @@ for i in range(W_N):
                             alpha=0.6, zorder=4, edgecolors="none")
     w_node_scatters.append(sc)
 
-w_hub = ax_gravity.scatter([0],[0], s=30, c=ACCENT, alpha=0.9, zorder=6, edgecolors="none")
+w_hub = ax_gravity.scatter([0],[0], s=70, c=ACCENT, alpha=0.9, zorder=6, edgecolors="none")
+w_hub_state = dict(x=0.0, y=0.0, vx=0.0, vy=0.0)
 
 w_label_txt = []
 for i in range(W_N):
@@ -634,27 +637,21 @@ def update(_):
 
     dom_i   = int(np.argmax(raw_bvals))
     dom_col = BAND_COLORS[dom_i]
-    w_dom_text.set_text(f"pulling toward: {BAND_LABELS[dom_i]}")
+    w_dom_text.set_text(f"ball moving to: {BAND_LABELS[dom_i]}")
     w_dom_text.set_color(dom_col)
 
+    # Mesh nodes stay near their home ring position — only the hub ball (below)
+    # travels out to the dominant band's label. A gentle tangential wobble keeps
+    # the mesh from looking frozen without pulling nodes off toward the labels.
     for nd in w_nodes:
         if nd["spoke"] < 0:
             nd["x"] = 0.0; nd["y"] = 0.0
             continue
         i  = nd["spoke"]
-        w  = wnorm[i]
-        ax_, ay_ = w_anchor(i)
-        ring_frac = nd["ring"] / W_RINGS
-        pull = w * W_PULL * ring_frac
-        tx = nd["hx"] + (ax_ - nd["hx"]) * pull
-        ty = nd["hy"] + (ay_ - nd["hy"]) * pull
-
-        # Tangential wander so each node drifts off its rigid spoke line instead
-        # of only ever sliding straight toward/away from the anchor.
         spoke_angle = (i / W_N) * math.pi * 2 - math.pi / 2
         wob = math.sin(now * nd["wob_speed"] + nd["wob_phase"]) * W_WOBBLE * nd["rad"]
-        tx += -math.sin(spoke_angle) * wob
-        ty +=  math.cos(spoke_angle) * wob
+        tx = nd["hx"] + -math.sin(spoke_angle) * wob
+        ty = nd["hy"] +  math.cos(spoke_angle) * wob
 
         nd["vx"] += (tx - nd["x"]) * W_SPRING
         nd["vy"] += (ty - nd["y"]) * W_SPRING
@@ -662,6 +659,19 @@ def update(_):
         nd["vy"] *= W_DAMP
         nd["x"]  += nd["vx"]
         nd["y"]  += nd["vy"]
+
+    # Hub ball: the one thing that actually travels — it eases toward whichever
+    # band's labeled anchor point is currently dominant.
+    dom_ax, dom_ay = w_anchor(dom_i)
+    hub_tx = dom_ax * W_HUB_REACH
+    hub_ty = dom_ay * W_HUB_REACH
+    w_hub_state["vx"] += (hub_tx - w_hub_state["x"]) * W_HUB_SPRING
+    w_hub_state["vy"] += (hub_ty - w_hub_state["y"]) * W_HUB_SPRING
+    w_hub_state["vx"] *= W_HUB_DAMP
+    w_hub_state["vy"] *= W_HUB_DAMP
+    w_hub_state["x"]  += w_hub_state["vx"]
+    w_hub_state["y"]  += w_hub_state["vy"]
+    w_hub.set_offsets([[w_hub_state["x"], w_hub_state["y"]]])
 
     for (a, b, spoke), ln in zip(w_edges, w_edge_lines):
         na = w_nodes[a]; nb = w_nodes[b]
