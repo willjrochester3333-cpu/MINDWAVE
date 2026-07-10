@@ -386,8 +386,9 @@ W_N     = len(BAND_KEYS)
 W_RINGS = 4
 W_MAXR  = 0.82
 W_PULL  = 0.85
-W_SPRING = 0.045
-W_DAMP   = 0.85
+W_SPRING = 0.065       # was 0.045 — snappier response to the pull target
+W_DAMP   = 0.90        # was 0.85 — less velocity lost per frame → looser, springier drift
+W_WOBBLE = 0.16         # tangential wander, as a fraction of each node's ring radius
 
 def w_anchor(i):
     a = (i / W_N) * math.pi * 2 - math.pi / 2
@@ -403,7 +404,9 @@ for r in range(1, W_RINGS + 1):
         hy = math.sin(a) * rad
         w_grid[(r, i)] = len(w_nodes)
         w_nodes.append(dict(hx=hx, hy=hy, x=hx, y=hy, vx=0.0, vy=0.0,
-                            ring=r, spoke=i, rad=rad))
+                            ring=r, spoke=i, rad=rad,
+                            wob_phase=random.uniform(0, 2*math.pi),
+                            wob_speed=random.uniform(0.35, 1.1)))
 
 W_CENTER = len(w_nodes)
 w_nodes.append(dict(hx=0.0, hy=0.0, x=0.0, y=0.0, vx=0.0, vy=0.0,
@@ -645,6 +648,14 @@ def update(_):
         pull = w * W_PULL * ring_frac
         tx = nd["hx"] + (ax_ - nd["hx"]) * pull
         ty = nd["hy"] + (ay_ - nd["hy"]) * pull
+
+        # Tangential wander so each node drifts off its rigid spoke line instead
+        # of only ever sliding straight toward/away from the anchor.
+        spoke_angle = (i / W_N) * math.pi * 2 - math.pi / 2
+        wob = math.sin(now * nd["wob_speed"] + nd["wob_phase"]) * W_WOBBLE * nd["rad"]
+        tx += -math.sin(spoke_angle) * wob
+        ty +=  math.cos(spoke_angle) * wob
+
         nd["vx"] += (tx - nd["x"]) * W_SPRING
         nd["vy"] += (ty - nd["y"]) * W_SPRING
         nd["vx"] *= W_DAMP
