@@ -72,6 +72,7 @@ if SCIPY_OK:
         "BETA":  make_bp(13,  30),
         "THETA": make_bp(4,    8),
         "DELTA": make_bp(0.5, 3.9),
+        "GAMMA": make_bp(30,  49),
     }
 
 # ── ThinkGear thread — lock held ONLY during state write ─────────────────────
@@ -169,7 +170,7 @@ def log_band(v):
 def log_bands(snap):
     """Return log-scaled band values for all 8 bands."""
     return [log_band(snap[k]) for k in BAND_KEYS]
-MODE_COLORS = {"RAW":ACCENT,"ALPHA":GREEN,"BETA":AMBER,"THETA":PURPLE,"DELTA":PINK}
+MODE_COLORS = {"RAW":ACCENT,"ALPHA":GREEN,"BETA":AMBER,"THETA":PURPLE,"DELTA":PINK,"GAMMA":"#b83460"}
 
 # ── rcParams ──────────────────────────────────────────────────────────────────
 plt.rcParams.update({
@@ -273,10 +274,10 @@ def apply_filter(raw, mode):
 # ── Filter buttons ────────────────────────────────────────────────────────────
 if SCIPY_OK:
     fig.text(0.062, 0.073, "filter:", fontsize=8, color=MUTED, fontfamily="monospace")
-    btn_defs = ["RAW","ALPHA","BETA","THETA","DELTA"]
+    btn_defs = ["RAW","ALPHA","BETA","THETA","DELTA","GAMMA"]
     btn_refs = []
     for i, mode in enumerate(btn_defs):
-        ax_b = fig.add_axes([0.105 + i*0.09, 0.055, 0.082, 0.030])
+        ax_b = fig.add_axes([0.105 + i*0.077, 0.055, 0.070, 0.030])
         col  = MODE_COLORS[mode]
         btn  = Button(ax_b, mode, color=CARD, hovercolor="#1f2937")
         btn.label.set_color(col); btn.label.set_fontsize(9)
@@ -295,6 +296,7 @@ if SCIPY_OK:
                     "BETA":  "beta  13–30 Hz  |  concentrate hard → amplitude rises",
                     "THETA": "theta  4–8 Hz   |  relax / let mind wander",
                     "DELTA": "delta  0.5–4 Hz |  slow background rhythm",
+                    "GAMMA": "gamma  30–49 Hz |  peak focus / sensory binding",
                 }
                 ax_wave.set_title(titles[m], loc="left", pad=5)
                 ax_wave.set_ylim(-80, 80) if m != "RAW" else ax_wave.set_ylim(-220, 220)
@@ -323,7 +325,7 @@ def save_snapshot(event=None):
 
 paused = [False]
 
-ax_pause = fig.add_axes([0.635, 0.055, 0.105, 0.030])
+ax_pause = fig.add_axes([0.60, 0.055, 0.105, 0.030])
 btn_pause = Button(ax_pause, "⏸ PAUSE", color=CARD, hovercolor="#1f2937")
 btn_pause.label.set_color(TEXT); btn_pause.label.set_fontsize(9)
 btn_pause.label.set_fontfamily("monospace")
@@ -685,7 +687,7 @@ print("Waiting for ThinkGear Connector on port 13854...")
 print("Do NOT open OpenViBE — it blocks the connection.")
 print("Put headset on and wait for blue light.\n")
 if SCIPY_OK:
-    print("Filter buttons: RAW | ALPHA (relax) | BETA (focus) | THETA | DELTA\n")
+    print("Filter buttons: RAW | ALPHA (relax) | BETA (focus) | THETA | DELTA | GAMMA\n")
 print("Keyboard shortcuts: 'p' pause/resume, 's' save snapshot PNG\n")
 
 plt.suptitle("MindWave Mobile 2  —  Live EEG Dashboard",
