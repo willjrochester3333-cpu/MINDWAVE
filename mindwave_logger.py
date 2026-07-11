@@ -31,6 +31,7 @@ TG_PORT     = 13854
 OUTPUT_DIR  = Path.home() / "Downloads" / "eeg_logs"
 REFRESH_MS  = 200
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
+ESENSE_HINT_DELAY = 10   # seconds attention/meditation can sit at 0 before we say something
 
 FIELDNAMES = [
     "timestamp", "attention", "meditation", "signal_quality_pct",
@@ -42,6 +43,7 @@ FIELDNAMES = [
 BG, CARD, BORDER = "#0d1117", "#161b22", "#30363d"
 ACCENT, GREEN, AMBER, PINK = "#378ADD", "#1D9E75", "#BA7517", "#D4537E"
 TEXT, MUTED = "#e6edf3", "#8b949e"
+GREEN_HOVER, PINK_HOVER = "#24C08D", "#E17DA0"
 
 # key, short label, color — same 8 bands the dashboard shows
 BAND_DEFS = [
@@ -60,7 +62,7 @@ state = dict(
     attention=0, meditation=0, signal_q=0,
     delta=0, theta=0, low_alpha=0, high_alpha=0,
     low_beta=0, high_beta=0, low_gamma=0, mid_gamma=0,
-    connected=False, packet_count=0,
+    connected=False,
 )
 lock = threading.Lock()
 
@@ -119,7 +121,6 @@ def thinkgear_thread():
                             state["high_beta"]  = p.get("highBeta",  state["high_beta"])
                             state["low_gamma"]  = p.get("lowGamma",  state["low_gamma"])
                             state["mid_gamma"]  = p.get("midGamma",  state["mid_gamma"])
-                            state["packet_count"] += 1
                             got_power = True
                     # _write_row() takes the lock itself, so it must run after
                     # this block releases it — lock is a plain Lock, not reentrant.
@@ -185,22 +186,31 @@ def unique_path(path):
 root = tk.Tk()
 root.title("MindWave — Data Logger")
 root.configure(bg=BG)
-root.geometry("860x430")
+root.geometry("860x440")
 root.resizable(False, False)
 
-def card(parent):
-    return tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+tk.Frame(root, bg=ACCENT, height=3).pack(fill="x", side="top")
+
+def card(parent, accent=None):
+    outer = tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+    strip = tk.Frame(outer, bg=accent or CARD, height=3)
+    strip.pack(fill="x", side="top")
+    return outer, strip
+
+def add_hover(widget, normal_fg, hover_fg):
+    widget.bind("<Enter>", lambda e: widget.config(fg=hover_fg))
+    widget.bind("<Leave>", lambda e: widget.config(fg=normal_fg))
 
 # top bar: title on the left, connection status on the right
 top_bar = tk.Frame(root, bg=BG)
-top_bar.pack(fill="x", padx=24, pady=(18, 14))
+top_bar.pack(fill="x", padx=24, pady=(16, 14))
 
 title_box = tk.Frame(top_bar, bg=BG)
 title_box.pack(side="left")
-tk.Label(title_box, text="MindWave EEG", font=("Segoe UI", 18, "bold"),
+tk.Label(title_box, text="MindWave EEG", font=("Segoe UI", 19, "bold"),
           bg=BG, fg=TEXT).pack(anchor="w")
 tk.Label(title_box, text="live capture · saved as CSV", font=("Segoe UI", 10),
-          bg=BG, fg=MUTED).pack(anchor="w")
+          bg=BG, fg=MUTED).pack(anchor="w", pady=(2, 0))
 
 status_box = tk.Frame(top_bar, bg=BG)
 status_box.pack(side="right", anchor="e")
@@ -215,17 +225,23 @@ stats_row = tk.Frame(root, bg=BG)
 stats_row.pack(fill="x", padx=24)
 
 def make_stat(parent, label, color):
-    c = card(parent)
+    c, _strip = card(parent, accent=color)
     c.pack(side="left", expand=True, fill="both", padx=6, ipady=10)
-    tk.Label(c, text=label, font=("Segoe UI", 9), bg=CARD, fg=MUTED).pack(pady=(8, 2))
+    tk.Label(c, text=label, font=("Segoe UI", 9), bg=CARD, fg=MUTED).pack(pady=(9, 2))
     val = tk.Label(c, text="0", font=("Segoe UI", 22, "bold"), bg=CARD, fg=color)
-    val.pack(pady=(0, 8))
+    val.pack(pady=(0, 9))
     return val
 
 t_att  = make_stat(stats_row, "ATTENTION", ACCENT)
 t_med  = make_stat(stats_row, "MEDITATION", GREEN)
 t_sig  = make_stat(stats_row, "SIGNAL", TEXT)
 t_samp = make_stat(stats_row, "SAMPLES", AMBER)
+
+# quiet by default; only appears if attention/meditation sit at 0 too long
+esense_hint = tk.Label(root, text="", font=("Segoe UI", 9), bg=BG, fg=AMBER,
+                        wraplength=810, justify="left")
+esense_hint.pack(fill="x", padx=24, pady=(6, 0))
+esense_zero_since = {"t": None}
 
 # body: band power grid on the left, recording controls on the right
 body = tk.Frame(root, bg=BG)
@@ -234,7 +250,7 @@ body.grid_columnconfigure(0, weight=3)
 body.grid_columnconfigure(1, weight=2)
 body.grid_rowconfigure(0, weight=1)
 
-band_card = card(body)
+band_card, _band_strip = card(body, accent=ACCENT)
 band_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 tk.Label(band_card, text="BAND POWER (raw)", font=("Segoe UI", 9),
           bg=CARD, fg=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
@@ -254,7 +270,7 @@ for idx, (key, label, color) in enumerate(BAND_DEFS):
     v.pack(anchor="w")
     band_val_labels[key] = v
 
-record_card = card(body)
+record_card, record_strip = card(body, accent=ACCENT)
 record_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 tk.Label(record_card, text="RECORDING", font=("Segoe UI", 9),
           bg=CARD, fg=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
@@ -283,6 +299,7 @@ def toggle_recording():
         filename_var.set(path.stem)
         filename_entry.config(state="disabled")
         btn_record.config(text="■  STOP RECORDING", bg=PINK)
+        record_strip.config(bg=PINK)
         rec_status_txt.config(text="Recording…")
     else:
         with lock:
@@ -297,6 +314,7 @@ def toggle_recording():
         rec_state["on"] = False
         filename_entry.config(state="normal")
         btn_record.config(text="●  START RECORDING", bg=GREEN)
+        record_strip.config(bg=ACCENT)
         rec_status_txt.config(text="Not recording")
         if path:
             file_txt.config(text=f"Saved {rows} rows → {path.name}")
@@ -305,6 +323,8 @@ btn_record = tk.Button(record_card, text="●  START RECORDING", font=("Segoe UI
                         bg=GREEN, fg="#0d1117", activebackground=GREEN, bd=0,
                         relief="flat", command=toggle_recording, cursor="hand2")
 btn_record.pack(fill="x", padx=14, pady=(0, 10))
+btn_record.bind("<Enter>", lambda e: btn_record.config(bg=PINK_HOVER if rec_state["on"] else GREEN_HOVER))
+btn_record.bind("<Leave>", lambda e: btn_record.config(bg=PINK if rec_state["on"] else GREEN))
 
 rec_status_txt = tk.Label(record_card, text="Not recording", font=("Segoe UI", 9),
                            bg=CARD, fg=MUTED, wraplength=220, justify="left")
@@ -323,10 +343,11 @@ def open_output_folder():
     else:
         subprocess.run(["xdg-open", str(OUTPUT_DIR)])
 
-btn_folder = tk.Button(record_card, text="Open folder", font=("Segoe UI", 8),
+btn_folder = tk.Button(record_card, text="Open folder", font=("Segoe UI", 8, "underline"),
                         bg=CARD, fg=MUTED, bd=0, relief="flat",
                         activebackground=CARD, command=open_output_folder, cursor="hand2")
 btn_folder.pack(anchor="w", padx=14, pady=(4, 12))
+add_hover(btn_folder, normal_fg=MUTED, hover_fg=ACCENT)
 
 # ── Refresh loop ──────────────────────────────────────────────────────────────
 def refresh():
@@ -338,7 +359,9 @@ def refresh():
     t_med.config(text=str(s["meditation"]))
     t_sig.config(text=f"{s['signal_q']}%",
                  fg=GREEN if s["signal_q"] >= 70 else (AMBER if s["signal_q"] >= 40 else PINK))
-    t_samp.config(text=f"{s['packet_count']:,}")
+    # only counts rows written during the current recording — 0 when idle,
+    # and reset back to 0 the instant a new recording starts.
+    t_samp.config(text=f"{rows:,}" if rec_state["on"] else "0")
 
     for key, _label, _color in BAND_DEFS:
         band_val_labels[key].config(text=str(s[key]))
@@ -349,6 +372,19 @@ def refresh():
     else:
         status_dot.config(fg=AMBER)
         status_txt.config(text="waiting for headset…")
+
+    # attention/meditation report 0 whenever ThinkGear can't calculate them yet
+    # (usually a headset-fit issue) — flag it instead of leaving 0 looking broken.
+    now = time.time()
+    if s["connected"] and s["attention"] == 0 and s["meditation"] == 0:
+        if esense_zero_since["t"] is None:
+            esense_zero_since["t"] = now
+        elif now - esense_zero_since["t"] > ESENSE_HINT_DELAY:
+            esense_hint.config(text="⚠  No attention/meditation reading yet — check the "
+                                     "forehead sensor and ear-clip contact, then sit still a moment")
+    else:
+        esense_zero_since["t"] = None
+        esense_hint.config(text="")
 
     if rec_state["on"]:
         rec_status_txt.config(text=f"Recording — {rows} rows")
