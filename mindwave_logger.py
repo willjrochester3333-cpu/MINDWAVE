@@ -46,6 +46,18 @@ BG, CARD, BORDER = "#0d1117", "#161b22", "#30363d"
 ACCENT, GREEN, AMBER, PINK = "#378ADD", "#1D9E75", "#BA7517", "#D4537E"
 TEXT, MUTED = "#e6edf3", "#8b949e"
 
+# key, short label, color — same 8 bands the dashboard shows
+BAND_DEFS = [
+    ("delta",      "Delta", "#534AB7"),
+    ("theta",      "Theta", ACCENT),
+    ("low_alpha",  "Lo α",  GREEN),
+    ("high_alpha", "Hi α",  "#27a870"),
+    ("low_beta",   "Lo β",  AMBER),
+    ("high_beta",  "Hi β",  "#d9861e"),
+    ("low_gamma",  "Lo γ",  PINK),
+    ("mid_gamma",  "Mi γ",  "#b83460"),
+]
+
 # ── Shared state ────────────────────────────────────────────────────────────
 state = dict(
     attention=0, meditation=0, signal_q=0,
@@ -156,29 +168,34 @@ def _write_row():
 root = tk.Tk()
 root.title("MindWave — Data Logger")
 root.configure(bg=BG)
-root.geometry("420x480")
+root.geometry("860x430")
 root.resizable(False, False)
 
 def card(parent):
     return tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
 
-header = tk.Frame(root, bg=BG)
-header.pack(fill="x", padx=20, pady=(20, 10))
-tk.Label(header, text="MindWave EEG", font=("Segoe UI", 18, "bold"),
+# top bar: title on the left, connection status on the right
+top_bar = tk.Frame(root, bg=BG)
+top_bar.pack(fill="x", padx=24, pady=(18, 14))
+
+title_box = tk.Frame(top_bar, bg=BG)
+title_box.pack(side="left")
+tk.Label(title_box, text="MindWave EEG", font=("Segoe UI", 18, "bold"),
           bg=BG, fg=TEXT).pack(anchor="w")
-tk.Label(header, text="live capture · saved as CSV", font=("Segoe UI", 10),
+tk.Label(title_box, text="live capture · saved as CSV", font=("Segoe UI", 10),
           bg=BG, fg=MUTED).pack(anchor="w")
 
-status_row = tk.Frame(root, bg=BG)
-status_row.pack(fill="x", padx=20, pady=(0, 14))
-status_dot = tk.Label(status_row, text="●", font=("Segoe UI", 12), bg=BG, fg=AMBER)
+status_box = tk.Frame(top_bar, bg=BG)
+status_box.pack(side="right", anchor="e")
+status_dot = tk.Label(status_box, text="●", font=("Segoe UI", 13), bg=BG, fg=AMBER)
 status_dot.pack(side="left")
-status_txt = tk.Label(status_row, text="waiting for headset…", font=("Segoe UI", 10),
+status_txt = tk.Label(status_box, text="waiting for headset…", font=("Segoe UI", 10),
                        bg=BG, fg=MUTED)
 status_txt.pack(side="left", padx=(6, 0))
 
+# stat cards: attention / meditation / signal / samples, in one row
 stats_row = tk.Frame(root, bg=BG)
-stats_row.pack(fill="x", padx=20)
+stats_row.pack(fill="x", padx=24)
 
 def make_stat(parent, label, color):
     c = card(parent)
@@ -188,20 +205,42 @@ def make_stat(parent, label, color):
     val.pack(pady=(0, 8))
     return val
 
-t_att = make_stat(stats_row, "ATTENTION", ACCENT)
-t_med = make_stat(stats_row, "MEDITATION", GREEN)
-t_sig = make_stat(stats_row, "SIGNAL", TEXT)
+t_att  = make_stat(stats_row, "ATTENTION", ACCENT)
+t_med  = make_stat(stats_row, "MEDITATION", GREEN)
+t_sig  = make_stat(stats_row, "SIGNAL", TEXT)
+t_samp = make_stat(stats_row, "SAMPLES", AMBER)
 
-bands_card = card(root)
-bands_card.pack(fill="x", padx=20, pady=16, ipady=8)
-tk.Label(bands_card, text="BAND POWER (raw)", font=("Segoe UI", 9),
-          bg=CARD, fg=MUTED).pack(anchor="w", padx=12, pady=(6, 4))
-band_txt = tk.Label(bands_card, text="—", font=("Consolas", 9), justify="left",
-                     bg=CARD, fg=TEXT)
-band_txt.pack(anchor="w", padx=12, pady=(0, 6))
+# body: band power grid on the left, recording controls on the right
+body = tk.Frame(root, bg=BG)
+body.pack(fill="both", expand=True, padx=24, pady=16)
+body.grid_columnconfigure(0, weight=3)
+body.grid_columnconfigure(1, weight=2)
+body.grid_rowconfigure(0, weight=1)
 
-record_card = card(root)
-record_card.pack(fill="x", padx=20, pady=(0, 14), ipady=10)
+band_card = card(body)
+band_card.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+tk.Label(band_card, text="BAND POWER (raw)", font=("Segoe UI", 9),
+          bg=CARD, fg=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
+
+band_grid = tk.Frame(band_card, bg=CARD)
+band_grid.pack(fill="both", expand=True, padx=10, pady=(0, 12))
+for c in range(4):
+    band_grid.grid_columnconfigure(c, weight=1, uniform="band")
+
+band_val_labels = {}
+for idx, (key, label, color) in enumerate(BAND_DEFS):
+    r, c = divmod(idx, 4)
+    cell = tk.Frame(band_grid, bg=CARD)
+    cell.grid(row=r, column=c, sticky="nsew", padx=6, pady=8)
+    tk.Label(cell, text=label, font=("Segoe UI", 8), bg=CARD, fg=color).pack(anchor="w")
+    v = tk.Label(cell, text="0", font=("Consolas", 12, "bold"), bg=CARD, fg=TEXT)
+    v.pack(anchor="w")
+    band_val_labels[key] = v
+
+record_card = card(body)
+record_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+tk.Label(record_card, text="RECORDING", font=("Segoe UI", 9),
+          bg=CARD, fg=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
 
 rec_state = {"on": False}
 
@@ -217,6 +256,7 @@ def toggle_recording():
             recording.update(on=True, writer=writer, fh=fh, path=path, rows=0)
         rec_state["on"] = True
         btn_record.config(text="■  STOP RECORDING", bg=PINK)
+        rec_status_txt.config(text="Recording…")
     else:
         with lock:
             recording["on"] = False
@@ -229,17 +269,22 @@ def toggle_recording():
             fh.close()
         rec_state["on"] = False
         btn_record.config(text="●  START RECORDING", bg=GREEN)
+        rec_status_txt.config(text="Not recording")
         if path:
             file_txt.config(text=f"Saved {rows} rows → {path.name}")
 
 btn_record = tk.Button(record_card, text="●  START RECORDING", font=("Segoe UI", 11, "bold"),
                         bg=GREEN, fg="#0d1117", activebackground=GREEN, bd=0,
                         relief="flat", command=toggle_recording, cursor="hand2")
-btn_record.pack(fill="x", padx=12, pady=(4, 8))
+btn_record.pack(fill="x", padx=14, pady=(0, 10))
+
+rec_status_txt = tk.Label(record_card, text="Not recording", font=("Segoe UI", 9),
+                           bg=CARD, fg=MUTED, wraplength=220, justify="left")
+rec_status_txt.pack(anchor="w", padx=14)
 
 file_txt = tk.Label(record_card, text=f"Files are saved to {OUTPUT_DIR.name}/",
-                     font=("Segoe UI", 8), bg=CARD, fg=MUTED, wraplength=360, justify="left")
-file_txt.pack(anchor="w", padx=12)
+                     font=("Segoe UI", 8), bg=CARD, fg=MUTED, wraplength=220, justify="left")
+file_txt.pack(anchor="w", padx=14, pady=(6, 4))
 
 def open_output_folder():
     OUTPUT_DIR.mkdir(exist_ok=True)
@@ -253,10 +298,7 @@ def open_output_folder():
 btn_folder = tk.Button(record_card, text="Open folder", font=("Segoe UI", 8),
                         bg=CARD, fg=MUTED, bd=0, relief="flat",
                         activebackground=CARD, command=open_output_folder, cursor="hand2")
-btn_folder.pack(anchor="e", padx=12, pady=(0, 4))
-
-footer = tk.Label(root, text="0 packets received", font=("Segoe UI", 8), bg=BG, fg=MUTED)
-footer.pack(side="bottom", pady=(0, 12))
+btn_folder.pack(anchor="w", padx=14, pady=(4, 12))
 
 # ── Refresh loop ──────────────────────────────────────────────────────────────
 def refresh():
@@ -266,12 +308,12 @@ def refresh():
 
     t_att.config(text=str(s["attention"]))
     t_med.config(text=str(s["meditation"]))
-    t_sig.config(text=f"{s['signal_q']}%")
+    t_sig.config(text=f"{s['signal_q']}%",
+                 fg=GREEN if s["signal_q"] >= 70 else (AMBER if s["signal_q"] >= 40 else PINK))
+    t_samp.config(text=f"{s['packet_count']:,}")
 
-    band_txt.config(text=(
-        f"delta {s['delta']:<8} theta {s['theta']:<8} lowA {s['low_alpha']:<8} hiA {s['high_alpha']}\n"
-        f"lowB  {s['low_beta']:<8} hiB   {s['high_beta']:<8} lowG {s['low_gamma']:<8} midG {s['mid_gamma']}"
-    ))
+    for key, _label, _color in BAND_DEFS:
+        band_val_labels[key].config(text=str(s[key]))
 
     if s["connected"]:
         status_dot.config(fg=GREEN)
@@ -280,10 +322,8 @@ def refresh():
         status_dot.config(fg=AMBER)
         status_txt.config(text="waiting for headset…")
 
-    footer_text = f"{s['packet_count']:,} packets received"
     if rec_state["on"]:
-        footer_text += f"   ·   recording ({rows} rows)"
-    footer.config(text=footer_text)
+        rec_status_txt.config(text=f"Recording — {rows} rows")
 
     root.after(REFRESH_MS, refresh)
 
