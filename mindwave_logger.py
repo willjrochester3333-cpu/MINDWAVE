@@ -26,9 +26,9 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 TG_HOST     = "127.0.0.1"
 TG_PORT     = 13854
-# Always lands in a MINDWAVE folder in the user's home directory
-# (C:\Users\<you>\MINDWAVE on Windows) regardless of where/how the script is run.
-OUTPUT_DIR  = Path.home() / "MINDWAVE"
+# Always lands in MINDWAVE\eeg_logs in the user's home directory
+# (C:\Users\<you>\MINDWAVE\eeg_logs on Windows) regardless of where/how the script is run.
+OUTPUT_DIR  = Path.home() / "MINDWAVE" / "eeg_logs"
 REFRESH_MS  = 200
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 
