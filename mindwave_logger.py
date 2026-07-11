@@ -26,7 +26,13 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 TG_HOST     = "127.0.0.1"
 TG_PORT     = 13854
-OUTPUT_DIR  = Path(__file__).resolve().parent / "eeg_logs"
+try:
+    _base_dir = Path(__file__).resolve().parent
+except NameError:
+    # __file__ isn't set when the script is run via exec()/a REPL instead of
+    # `python mindwave_logger.py` — fall back to the current directory.
+    _base_dir = Path.cwd()
+OUTPUT_DIR  = _base_dir / "eeg_logs"
 REFRESH_MS  = 200
 
 FIELDNAMES = [
