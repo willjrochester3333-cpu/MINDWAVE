@@ -26,14 +26,11 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 TG_HOST     = "127.0.0.1"
 TG_PORT     = 13854
-try:
-    _base_dir = Path(__file__).resolve().parent
-except NameError:
-    # __file__ isn't set when the script is run via exec()/a REPL instead of
-    # `python mindwave_logger.py` — fall back to the current directory.
-    _base_dir = Path.cwd()
-OUTPUT_DIR  = _base_dir / "eeg_logs"
+# Always lands in a MINDWAVE folder in the user's home directory
+# (C:\Users\<you>\MINDWAVE on Windows) regardless of where/how the script is run.
+OUTPUT_DIR  = Path.home() / "MINDWAVE"
 REFRESH_MS  = 200
+INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 
 FIELDNAMES = [
     "timestamp", "attention", "meditation", "signal_quality_pct",
@@ -164,6 +161,26 @@ def _write_row():
         recording["fh"].flush()
         recording["rows"] += 1
 
+def sanitize_filename(name):
+    """Turn whatever the user typed into a safe, .csv-suffixed Windows filename."""
+    name = "".join(c for c in name.strip() if c not in INVALID_FILENAME_CHARS)
+    if not name:
+        name = f"eeg_log_{time.strftime('%Y%m%d_%H%M%S')}"
+    if not name.lower().endswith(".csv"):
+        name += ".csv"
+    return name
+
+def unique_path(path):
+    """Append (1), (2), ... if path already exists, so recordings never clobber each other."""
+    if not path.exists():
+        return path
+    stem, suffix, n = path.stem, path.suffix, 1
+    while True:
+        candidate = path.with_name(f"{stem} ({n}){suffix}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
 # ── UI ─────────────────────────────────────────────────────────────────────
 root = tk.Tk()
 root.title("MindWave — Data Logger")
@@ -242,19 +259,29 @@ record_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 tk.Label(record_card, text="RECORDING", font=("Segoe UI", 9),
           bg=CARD, fg=MUTED).pack(anchor="w", padx=14, pady=(12, 6))
 
+tk.Label(record_card, text="File name", font=("Segoe UI", 8),
+          bg=CARD, fg=MUTED).pack(anchor="w", padx=14)
+filename_var = tk.StringVar(value=f"eeg_log_{time.strftime('%Y%m%d_%H%M%S')}")
+filename_entry = tk.Entry(record_card, textvariable=filename_var, font=("Segoe UI", 10),
+                           bg=BG, fg=TEXT, insertbackground=TEXT, relief="flat",
+                           highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT)
+filename_entry.pack(fill="x", padx=14, pady=(2, 10), ipady=4)
+
 rec_state = {"on": False}
 
 def toggle_recording():
     if not rec_state["on"]:
-        OUTPUT_DIR.mkdir(exist_ok=True)
-        fname = f"eeg_log_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-        path = OUTPUT_DIR / fname
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        fname = sanitize_filename(filename_var.get())
+        path = unique_path(OUTPUT_DIR / fname)
         fh = open(path, "w", newline="", encoding="utf-8")
         writer = csv.DictWriter(fh, fieldnames=FIELDNAMES)
         writer.writeheader()
         with lock:
             recording.update(on=True, writer=writer, fh=fh, path=path, rows=0)
         rec_state["on"] = True
+        filename_var.set(path.stem)
+        filename_entry.config(state="disabled")
         btn_record.config(text="■  STOP RECORDING", bg=PINK)
         rec_status_txt.config(text="Recording…")
     else:
@@ -268,6 +295,7 @@ def toggle_recording():
         if fh:
             fh.close()
         rec_state["on"] = False
+        filename_entry.config(state="normal")
         btn_record.config(text="●  START RECORDING", bg=GREEN)
         rec_status_txt.config(text="Not recording")
         if path:
@@ -282,12 +310,12 @@ rec_status_txt = tk.Label(record_card, text="Not recording", font=("Segoe UI", 9
                            bg=CARD, fg=MUTED, wraplength=220, justify="left")
 rec_status_txt.pack(anchor="w", padx=14)
 
-file_txt = tk.Label(record_card, text=f"Files are saved to {OUTPUT_DIR.name}/",
+file_txt = tk.Label(record_card, text=f"Saved to {OUTPUT_DIR}",
                      font=("Segoe UI", 8), bg=CARD, fg=MUTED, wraplength=220, justify="left")
 file_txt.pack(anchor="w", padx=14, pady=(6, 4))
 
 def open_output_folder():
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     if sys.platform.startswith("win"):
         os.startfile(OUTPUT_DIR)
     elif sys.platform == "darwin":
