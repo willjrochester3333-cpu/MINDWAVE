@@ -26,9 +26,9 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 TG_HOST     = "127.0.0.1"
 TG_PORT     = 13854
-# Always lands in an eeg_logs folder in the user's home directory
-# (C:\Users\<you>\eeg_logs on Windows) regardless of where/how the script is run.
-OUTPUT_DIR  = Path.home() / "eeg_logs"
+# Always lands in an eeg_logs folder under Documents (C:\Users\<you>\Documents\eeg_logs
+# on Windows) — visible in Explorer's sidebar by default, unlike the raw home folder.
+OUTPUT_DIR  = Path.home() / "Documents" / "eeg_logs"
 REFRESH_MS  = 200
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 
