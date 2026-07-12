@@ -21,10 +21,13 @@ just run the script with no flags to use OpenViBE):
       IMPORTANT: Acquisition Server's own "Connection port: 1024" is
       NOT an LSL stream — it's OpenViBE's internal protocol for
       talking to Designer. To get an LSL stream out of it, open
-      OpenViBE Designer and run a scenario with an "Acquisition
+      OpenViBE Designer and run (Play) a scenario with an "Acquisition
       Client" box (reading from Acquisition Server) feeding an "LSL
-      Export" box, with the LSL stream type set to "EEG". This script
-      then picks that stream up automatically.
+      Export" box. That box's settings are just a stream name (default
+      "openvibeSignal") and a marker stream name — no "type" field.
+      This script looks for a stream named "openvibeSignal" by
+      default; pass --lsl-stream-name if you changed it, or it'll
+      fall back to whatever LSL stream it can find.
 
   thinkgear
       Connects to ThinkGear Connector directly (same approach as
@@ -68,6 +71,7 @@ BAUD_RATE   = 115200
 SEND_EVERY  = 0.5   # seconds between updates sent to the Pico
 PICO_VID    = 0x2E8A  # Raspberry Pi Foundation's USB vendor ID
 LSL_WINDOW_SECONDS = 2.0   # how much raw EEG history to use for band power estimation
+LSL_STREAM_NAME = "openvibeSignal"  # OpenViBE's LSL Export box default "Signal stream" name
 # ──────────────────────────────────────────────────────────────────────────────
 
 state = dict(attention=0, meditation=0, connected=False)
@@ -248,27 +252,35 @@ def direct_serial_thread(headset_port=None):
             time.sleep(3)
 
 # ── OpenViBE thread — pulls raw EEG via LSL, estimates focus/calm locally ────
-def openvibe_thread():
+def openvibe_thread(stream_name=None):
     try:
         import numpy as np
         from scipy.signal import welch
-        from pylsl import resolve_byprop, StreamInlet
+        from pylsl import resolve_byprop, resolve_streams, StreamInlet
     except ImportError as e:
         print(f"--source openvibe needs extra packages: {e}")
         print("Install them with: pip install pylsl numpy scipy")
         return
+
+    stream_name = stream_name or LSL_STREAM_NAME
 
     def band_power(freqs, power, lo, hi):
         mask = (freqs >= lo) & (freqs < hi)
         return float(power[mask].sum()) if mask.any() else 0.0
 
     while True:
-        print("Looking for an OpenViBE EEG stream via LSL...")
-        streams = resolve_byprop("type", "EEG", timeout=5)
+        print(f"Looking for an LSL stream named '{stream_name}'...")
+        streams = resolve_byprop("name", stream_name, timeout=5)
         if not streams:
-            print("No LSL EEG stream found. In OpenViBE, make sure Acquisition Server is "
-                  "running with an LSL export enabled (or a Designer scenario with an "
-                  "'LSL Export' box) — retrying in 5s...")
+            # fall back to whatever LSL stream is available, in case the
+            # OpenViBE scenario used a different "Signal stream" name
+            streams = resolve_streams(wait_time=2.0)
+            if streams:
+                print(f"No stream named '{stream_name}' — using '{streams[0].name()}' instead.")
+        if not streams:
+            print("No LSL stream found at all. In OpenViBE Designer, make sure a scenario "
+                  "with an 'LSL Export' box is running (Play), not just Acquisition Server "
+                  "— retrying in 5s...")
             with lock:
                 state["connected"] = False
             time.sleep(5)
@@ -342,6 +354,10 @@ def main():
     arg_parser.add_argument("--headset-port", default=None,
                              help="Headset's Bluetooth COM port for --source serial "
                                   "(auto-detected if omitted)")
+    arg_parser.add_argument("--lsl-stream-name", default=LSL_STREAM_NAME,
+                             help=f"LSL stream name for --source openvibe "
+                                  f"(default: '{LSL_STREAM_NAME}', matching OpenViBE's "
+                                  f"LSL Export box default)")
     args = arg_parser.parse_args()
 
     if args.source == "thinkgear":
@@ -357,7 +373,7 @@ def main():
         print("Do NOT run ThinkGear Connector or OpenViBE at the same time — "
               "they'll grab the Bluetooth port first.\n")
     else:
-        th = threading.Thread(target=openvibe_thread, daemon=True)
+        th = threading.Thread(target=openvibe_thread, args=(args.lsl_stream_name,), daemon=True)
         th.start()
         print("Using OpenViBE via LSL. Focus/calm are an approximate proxy computed from")
         print("raw EEG band power, not NeuroSky's real eSense attention/meditation.\n")
