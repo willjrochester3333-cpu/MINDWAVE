@@ -2,14 +2,14 @@
 # ==========================================
 # Reads "A:<attention>,M:<meditation>\n" lines over USB serial from
 # mindwave_pico_bridge.py (running on the laptop) and shows them on a
-# 128x64 SSD1306 OLED, plus color-codes a WS2812B/NeoPixel strip by
+# 128x32 SSD1306 OLED, plus color-codes a WS2812B/NeoPixel strip by
 # attention (focus) level: red = low focus, amber = mid, green = high.
 #
 # WIRING
 # ------
 # OLED (SSD1306, I2C):
-#     SDA -> GPIO4  (physical pin 6)
-#     SCL -> GPIO5  (physical pin 7)
+#     SDA -> GPIO0  (physical pin 1)
+#     SCL -> GPIO1  (physical pin 2)
 #     VCC -> 3V3    (physical pin 36)
 #     GND -> GND
 #
@@ -34,15 +34,16 @@ import ssd1306
 # ── Config ──────────────────────────────────────────────────────────────────
 NUM_LEDS     = 8      # how many LEDs are on the strip
 LED_PIN      = 16
-I2C_SDA_PIN  = 4
-I2C_SCL_PIN  = 5
+I2C_SDA_PIN  = 0
+I2C_SCL_PIN  = 1
 OLED_WIDTH   = 128
-OLED_HEIGHT  = 64
+OLED_HEIGHT  = 32
 DATA_TIMEOUT = 5000   # ms without a line before we show "no signal"
 BRIGHTNESS   = 0.35   # 0..1, keeps the strip comfortable to look at
 # ──────────────────────────────────────────────────────────────────────────────
 
 i2c = I2C(0, sda=Pin(I2C_SDA_PIN), scl=Pin(I2C_SCL_PIN), freq=400000)
+time.sleep(1)  # let the OLED finish powering up before we talk to it
 
 
 def init_oled():
@@ -54,7 +55,7 @@ def init_oled():
     addr = 0x3C if 0x3C in addrs else (0x3D if 0x3D in addrs else None)
     if addr is None:
         print("No SSD1306 responded on the I2C bus — check wiring: "
-              "SDA=GPIO4, SCL=GPIO5, VCC=3V3, GND=GND.")
+              "SDA=GPIO0, SCL=GPIO1, VCC=3V3, GND=GND.")
         return None
     try:
         return ssd1306.SSD1306_I2C(OLED_WIDTH, OLED_HEIGHT, i2c, addr=addr)
@@ -84,14 +85,11 @@ def focus_color(attention):
 
 
 def show_reading(attention, meditation):
+    # 128x32 only fits 4 rows of default 8px text, so keep it to two lines
     if oled:
         oled.fill(0)
-        oled.text("MindWave", 0, 0)
-        oled.text("-" * 16, 0, 10)
-        oled.text("Focus", 0, 26)
-        oled.text(str(attention), 84, 26)
-        oled.text("Calm", 0, 44)
-        oled.text(str(meditation), 84, 44)
+        oled.text("Focus: {}".format(attention), 0, 0)
+        oled.text("Calm:  {}".format(meditation), 0, 16)
         oled.show()
 
     color = focus_color(attention)
@@ -104,8 +102,7 @@ def show_waiting(msg):
     if oled:
         oled.fill(0)
         oled.text("MindWave", 0, 0)
-        oled.text("-" * 16, 0, 10)
-        oled.text(msg, 0, 30)
+        oled.text(msg, 0, 16)
         oled.show()
     for i in range(NUM_LEDS):
         np[i] = (0, 0, 20)  # dim blue = idle/no data yet
@@ -125,7 +122,7 @@ def parse_line(line):
     return attention, meditation
 
 
-show_waiting("waiting for data...")
+show_waiting("waiting...")
 last_data_ms = time.ticks_ms()
 
 showing_no_signal = False
