@@ -15,7 +15,7 @@
 #     GND -> GND
 #
 # WS2812B / NeoPixel strip:
-#     DIN -> GPIO16 (physical pin 21) — a ~330 ohm resistor in series is good practice
+#     DIN -> GPIO28 (physical pin 34) — a ~330 ohm resistor in series is good practice
 #     5V  -> VBUS (physical pin 40), or an external 5V supply for longer strips
 #     GND -> GND (shared with the Pico)
 #
@@ -33,8 +33,8 @@ import neopixel
 import ssd1306
 
 # ── Config ──────────────────────────────────────────────────────────────────
-NUM_LEDS     = 8      # how many LEDs are on the strip
-LED_PIN      = 16
+NUM_LEDS     = 15     # how many LEDs are on the strip
+LED_PIN      = 28
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
 OLED_WIDTH   = 128
