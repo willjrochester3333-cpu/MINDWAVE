@@ -7,9 +7,26 @@ and color-codes a WS2812B/NeoPixel strip by focus (attention) level:
 red = low, amber = mid, green = high. pico/main.py never needs to
 change — both data sources below feed it the same "A:xx,M:xx" format.
 
-Three data sources, chosen with --source:
+Three data sources, chosen with --source (openvibe is the default —
+just run the script with no flags to use OpenViBE):
 
-  thinkgear (default)
+  openvibe (default)
+      Connects to an OpenViBE Acquisition Server via Lab Streaming
+      Layer (LSL). OpenViBE doesn't calculate eSense attention/
+      meditation itself — that's NeuroSky's proprietary algorithm —
+      so this mode computes an approximate focus/calm proxy locally
+      from raw EEG band power (beta dominance ~ focus, alpha
+      dominance ~ calm). It's a reasonable stand-in, not the real
+      thing.
+      IMPORTANT: Acquisition Server's own "Connection port: 1024" is
+      NOT an LSL stream — it's OpenViBE's internal protocol for
+      talking to Designer. To get an LSL stream out of it, open
+      OpenViBE Designer and run a scenario with an "Acquisition
+      Client" box (reading from Acquisition Server) feeding an "LSL
+      Export" box, with the LSL stream type set to "EEG". This script
+      then picks that stream up automatically.
+
+  thinkgear
       Connects to ThinkGear Connector directly (same approach as
       mindwave_dashboard.py / mindwave_logger.py, NO OpenViBE needed)
       and uses NeuroSky's real eSense attention/meditation values.
@@ -21,19 +38,10 @@ Three data sources, chosen with --source:
       OpenViBE, nothing else needs to be running. Also gives real
       eSense attention/meditation values, same as thinkgear mode.
       Pair the headset over Bluetooth first (PIN 0000) so it shows up
-      as a serial/COM port.
-
-  openvibe
-      Connects to an OpenViBE Acquisition Server via Lab Streaming
-      Layer (LSL) instead. OpenViBE doesn't calculate eSense
-      attention/meditation itself — that's NeuroSky's proprietary
-      algorithm — so this mode computes an approximate focus/calm
-      proxy locally from raw EEG band power (beta dominance ~ focus,
-      alpha dominance ~ calm). It's a reasonable stand-in, not the
-      real thing.
-      In OpenViBE, enable an LSL export of the EEG stream — either
-      Acquisition Server's own LSL output option if your version has
-      one, or a Designer scenario with an "LSL Export" box.
+      as a serial/COM port — on Windows, Classic Bluetooth devices
+      sometimes need a COM port added manually via Control Panel >
+      Devices and Printers > (right-click the device) > Bluetooth
+      Settings > COM Ports tab > Add, if one didn't appear on its own.
 
 This is a separate, minimal app — mindwave_dashboard.py and
 mindwave_logger.py are untouched.
@@ -329,8 +337,8 @@ def connect_serial(preferred_port=None):
 
 def main():
     arg_parser = argparse.ArgumentParser(description="Stream live focus/calm to a Raspberry Pi Pico.")
-    arg_parser.add_argument("--source", choices=["thinkgear", "serial", "openvibe"], default="thinkgear",
-                             help="Where to get EEG data from (default: thinkgear)")
+    arg_parser.add_argument("--source", choices=["thinkgear", "serial", "openvibe"], default="openvibe",
+                             help="Where to get EEG data from (default: openvibe)")
     arg_parser.add_argument("--headset-port", default=None,
                              help="Headset's Bluetooth COM port for --source serial "
                                   "(auto-detected if omitted)")
