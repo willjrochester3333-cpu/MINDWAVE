@@ -47,7 +47,7 @@ NUM_LEDS     = 15     # how many LEDs are on the strip
 LED_PIN      = 28
 BUZZER_PIN   = 11
 BUZZ_MS      = 200    # how long the buzzer sounds for
-QUOTE_DISPLAY_MS = 3000  # how long a motivational quote stays on screen
+QUOTE_DISPLAY_MS = 10000  # how long a motivational quote stays on screen
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
 OLED_WIDTH   = 128
@@ -184,7 +184,7 @@ while True:
         if line.startswith("Q:"):
             show_quote(line[2:].strip())
             # a quote line is still proof the link is alive, so don't let the
-            # 3s spent showing it push us into a false "no signal" state
+            # time spent showing it push us into a false "no signal" state
             last_data_ms = time.ticks_ms()
             showing_no_signal = False
         else:
