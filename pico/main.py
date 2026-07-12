@@ -3,7 +3,8 @@
 # Reads "A:<attention>,M:<meditation>\n" lines over USB serial from
 # mindwave_pico_bridge.py (running on the laptop) and shows them on a
 # 128x32 SSD1306 OLED, plus color-codes a WS2812B/NeoPixel strip by
-# attention (focus) level: red = low focus, amber = mid, green = high.
+# blending focus and calm: green = focused (high attention), red =
+# calm (high meditation), amber/yellow = a mix of both.
 #
 # WIRING
 # ------
@@ -72,16 +73,14 @@ stdin_poll = select.poll()
 stdin_poll.register(sys.stdin, select.POLLIN)
 
 
-def focus_color(attention):
-    """Red (low) -> amber (mid) -> green (high), scaled by BRIGHTNESS."""
+def focus_color(attention, meditation):
+    """Green = focused (attention), red = calm (meditation), blended
+    when both are present, scaled by BRIGHTNESS."""
     attention = max(0, min(100, attention))
-    if attention < 50:
-        t = attention / 50
-        r, g, b = 255, int(160 * t), 0
-    else:
-        t = (attention - 50) / 50
-        r, g, b = int(255 * (1 - t)), int(160 + 95 * t), 0
-    return (int(r * BRIGHTNESS), int(g * BRIGHTNESS), int(b * BRIGHTNESS))
+    meditation = max(0, min(100, meditation))
+    r = int(255 * meditation / 100)
+    g = int(255 * attention / 100)
+    return (int(r * BRIGHTNESS), int(g * BRIGHTNESS), 0)
 
 
 def show_reading(attention, meditation):
@@ -92,7 +91,7 @@ def show_reading(attention, meditation):
         oled.text("Calm:  {}".format(meditation), 0, 16)
         oled.show()
 
-    color = focus_color(attention)
+    color = focus_color(attention, meditation)
     for i in range(NUM_LEDS):
         np[i] = color
     np.write()

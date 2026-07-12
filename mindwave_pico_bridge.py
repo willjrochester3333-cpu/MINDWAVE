@@ -3,9 +3,10 @@ mindwave_pico_bridge.py  ── streams live focus/calm to a Raspberry Pi Pico
 ================================================
 Forwards attention + meditation over a USB cable to a Raspberry Pi Pico
 running pico/main.py, which shows the numbers on a 128x32 SSD1306 OLED
-and color-codes a WS2812B/NeoPixel strip by focus (attention) level:
-red = low, amber = mid, green = high. pico/main.py never needs to
-change — both data sources below feed it the same "A:xx,M:xx" format.
+and color-codes a WS2812B/NeoPixel strip by blending the two: green =
+focused (high attention), red = calm (high meditation), amber/yellow
+when both are elevated. pico/main.py never needs to change — all
+three data sources below feed it the same "A:xx,M:xx" format.
 
 Three data sources, chosen with --source (openvibe is the default —
 just run the script with no flags to use OpenViBE):
