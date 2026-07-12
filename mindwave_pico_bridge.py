@@ -11,8 +11,9 @@ when both are elevated. All three data sources below feed it the same
 Also acts as a light study coach in this script's own console: if
 you've been more "red" (calm) than focused for 5 of the last minutes,
 it suggests a short break (with a beep), and it prints an encouraging
-line roughly once a minute — each quote also sends a "Q:1" line to
-the Pico, which buzzes a buzzer on GPIO11 in response. See BREAK_* /
+line roughly once a minute — each quote also sends a "Q:<text>" line
+to the Pico, which shows it on the OLED and buzzes a buzzer on
+GPIO11 in response. See BREAK_* /
 MOTIVATION_* below to tune.
 
 Three data sources, chosen with --source (openvibe is the default —
@@ -357,6 +358,20 @@ def coach_print(body, emoji=""):
     except UnicodeEncodeError:
         print(f"\n{body}\n", flush=True)
 
+_ASCII_REPLACEMENTS = {
+    "—": "-", "–": "-",       # em dash, en dash
+    "‘": "'", "’": "'",       # curly single quotes
+    "“": '"', "”": '"',       # curly double quotes
+}
+
+def ascii_safe(text):
+    """The Pico's OLED font only covers plain ASCII — swap common
+    typographic characters for plain equivalents, then drop anything
+    else that still won't encode."""
+    for bad, good in _ASCII_REPLACEMENTS.items():
+        text = text.replace(bad, good)
+    return text.encode("ascii", "ignore").decode("ascii")
+
 # ── Pico serial link ──────────────────────────────────────────────────────────
 def find_pico_port():
     """Look for a USB serial port that looks like a Raspberry Pi Pico."""
@@ -450,9 +465,10 @@ def main():
                     red_window.clear()
 
             if now - last_motivation >= MOTIVATION_EVERY_SECONDS:
-                coach_print(random.choice(MOTIVATIONAL_MESSAGES), emoji="\U0001F4AA ")
+                quote = random.choice(MOTIVATIONAL_MESSAGES)
+                coach_print(quote, emoji="\U0001F4AA ")
                 try:
-                    ser.write(b"Q:1\n")
+                    ser.write(f"Q:{ascii_safe(quote)}\n".encode("ascii"))
                 except serial.SerialException:
                     pass  # the next A:/M: write will surface and handle any real disconnect
                 last_motivation = now

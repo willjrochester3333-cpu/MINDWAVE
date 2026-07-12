@@ -4,10 +4,10 @@
 # mindwave_pico_bridge.py (running on the laptop) and shows them on a
 # 128x32 SSD1306 OLED, plus color-codes a WS2812B/NeoPixel strip by
 # blending focus and calm: green = focused (high attention), red =
-# calm (high meditation), amber/yellow = a mix of both. Also buzzes a
-# buzzer once whenever it receives a "Q:1" line, which
-# mindwave_pico_bridge.py sends each time its study coach prints a
-# motivational quote.
+# calm (high meditation), amber/yellow = a mix of both. Also shows a
+# motivational quote (word-wrapped) and buzzes a buzzer for a few
+# seconds whenever it receives a "Q:<text>" line, which
+# mindwave_pico_bridge.py sends each time its study coach prints one.
 #
 # WIRING
 # ------
@@ -47,6 +47,7 @@ NUM_LEDS     = 15     # how many LEDs are on the strip
 LED_PIN      = 28
 BUZZER_PIN   = 11
 BUZZ_MS      = 200    # how long the buzzer sounds for
+QUOTE_DISPLAY_MS = 3000  # how long a motivational quote stays on screen
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
 OLED_WIDTH   = 128
@@ -118,6 +119,36 @@ def show_reading(attention, meditation):
     np.write()
 
 
+def wrap_text(text, width=16, max_lines=4):
+    """Word-wrap text to fit the OLED's fixed 8px-per-char font."""
+    words = text.split(" ")
+    lines = []
+    cur = ""
+    for w in words:
+        candidate = (cur + " " + w).strip()
+        if len(candidate) <= width:
+            cur = candidate
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w[:width]  # a single very long word just gets hard-truncated
+        if len(lines) >= max_lines:
+            break
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    return lines[:max_lines]
+
+
+def show_quote(text):
+    if oled:
+        oled.fill(0)
+        for i, line in enumerate(wrap_text(text)):
+            oled.text(line, 0, i * 8)
+        oled.show()
+    buzz()
+    time.sleep_ms(max(0, QUOTE_DISPLAY_MS - BUZZ_MS))
+
+
 def show_waiting(msg):
     if oled:
         oled.fill(0)
@@ -150,8 +181,12 @@ showing_no_signal = False
 while True:
     if stdin_poll.poll(500):
         line = sys.stdin.readline()
-        if line.strip() == "Q:1":
-            buzz()
+        if line.startswith("Q:"):
+            show_quote(line[2:].strip())
+            # a quote line is still proof the link is alive, so don't let the
+            # 3s spent showing it push us into a false "no signal" state
+            last_data_ms = time.ticks_ms()
+            showing_no_signal = False
         else:
             parsed = parse_line(line)
             if parsed:
