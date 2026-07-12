@@ -4,7 +4,10 @@
 # mindwave_pico_bridge.py (running on the laptop) and shows them on a
 # 128x32 SSD1306 OLED, plus color-codes a WS2812B/NeoPixel strip by
 # blending focus and calm: green = focused (high attention), red =
-# calm (high meditation), amber/yellow = a mix of both.
+# calm (high meditation), amber/yellow = a mix of both. Also buzzes a
+# buzzer once whenever it receives a "Q:1" line, which
+# mindwave_pico_bridge.py sends each time its study coach prints a
+# motivational quote.
 #
 # WIRING
 # ------
@@ -18,6 +21,13 @@
 #     DIN -> GPIO28 (physical pin 34) — a ~330 ohm resistor in series is good practice
 #     5V  -> VBUS (physical pin 40), or an external 5V supply for longer strips
 #     GND -> GND (shared with the Pico)
+#
+# Buzzer (optional — buzzes once whenever a motivational quote appears
+# in mindwave_pico_bridge.py's console):
+#     Signal -> GPIO11 (physical pin 15)
+#     GND    -> GND
+#     A simple active buzzer module can wire directly to GPIO11. A bare
+#     passive piezo will need driving through a transistor instead.
 #
 # SETUP
 # -----
@@ -35,6 +45,8 @@ import ssd1306
 # ── Config ──────────────────────────────────────────────────────────────────
 NUM_LEDS     = 15     # how many LEDs are on the strip
 LED_PIN      = 28
+BUZZER_PIN   = 11
+BUZZ_MS      = 200    # how long the buzzer sounds for
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
 OLED_WIDTH   = 128
@@ -69,8 +81,17 @@ oled = init_oled()
 
 np = neopixel.NeoPixel(Pin(LED_PIN), NUM_LEDS)
 
+buzzer = Pin(BUZZER_PIN, Pin.OUT)
+buzzer.value(0)
+
 stdin_poll = select.poll()
 stdin_poll.register(sys.stdin, select.POLLIN)
+
+
+def buzz():
+    buzzer.value(1)
+    time.sleep_ms(BUZZ_MS)
+    buzzer.value(0)
 
 
 def focus_color(attention, meditation):
@@ -129,11 +150,14 @@ showing_no_signal = False
 while True:
     if stdin_poll.poll(500):
         line = sys.stdin.readline()
-        parsed = parse_line(line)
-        if parsed:
-            last_data_ms = time.ticks_ms()
-            showing_no_signal = False
-            show_reading(*parsed)
+        if line.strip() == "Q:1":
+            buzz()
+        else:
+            parsed = parse_line(line)
+            if parsed:
+                last_data_ms = time.ticks_ms()
+                showing_no_signal = False
+                show_reading(*parsed)
 
     if not showing_no_signal and time.ticks_diff(time.ticks_ms(), last_data_ms) > DATA_TIMEOUT:
         showing_no_signal = True

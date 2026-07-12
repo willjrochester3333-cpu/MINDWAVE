@@ -5,13 +5,15 @@ Forwards attention + meditation over a USB cable to a Raspberry Pi Pico
 running pico/main.py, which shows the numbers on a 128x32 SSD1306 OLED
 and color-codes a WS2812B/NeoPixel strip by blending the two: green =
 focused (high attention), red = calm (high meditation), amber/yellow
-when both are elevated. pico/main.py never needs to change — all
-three data sources below feed it the same "A:xx,M:xx" format.
+when both are elevated. All three data sources below feed it the same
+"A:xx,M:xx" format.
 
 Also acts as a light study coach in this script's own console: if
 you've been more "red" (calm) than focused for 5 of the last minutes,
 it suggests a short break (with a beep), and it prints an encouraging
-line roughly once a minute. See BREAK_* / MOTIVATION_* below to tune.
+line roughly once a minute — each quote also sends a "Q:1" line to
+the Pico, which buzzes a buzzer on GPIO11 in response. See BREAK_* /
+MOTIVATION_* below to tune.
 
 Three data sources, chosen with --source (openvibe is the default —
 just run the script with no flags to use OpenViBE):
@@ -449,6 +451,10 @@ def main():
 
             if now - last_motivation >= MOTIVATION_EVERY_SECONDS:
                 coach_print(random.choice(MOTIVATIONAL_MESSAGES), emoji="\U0001F4AA ")
+                try:
+                    ser.write(b"Q:1\n")
+                except serial.SerialException:
+                    pass  # the next A:/M: write will surface and handle any real disconnect
                 last_motivation = now
 
             time.sleep(SEND_EVERY)
