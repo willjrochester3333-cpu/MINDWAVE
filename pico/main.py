@@ -43,7 +43,27 @@ BRIGHTNESS   = 0.35   # 0..1, keeps the strip comfortable to look at
 # ──────────────────────────────────────────────────────────────────────────────
 
 i2c = I2C(0, sda=Pin(I2C_SDA_PIN), scl=Pin(I2C_SCL_PIN), freq=400000)
-oled = ssd1306.SSD1306_I2C(OLED_WIDTH, OLED_HEIGHT, i2c)
+
+
+def init_oled():
+    """Scan the I2C bus and bring up the OLED if one answers.
+    Returns None (instead of crashing) if nothing responds, so the LED
+    strip still works even while the OLED wiring is being debugged."""
+    addrs = i2c.scan()
+    print("I2C devices found:", [hex(a) for a in addrs])
+    addr = 0x3C if 0x3C in addrs else (0x3D if 0x3D in addrs else None)
+    if addr is None:
+        print("No SSD1306 responded on the I2C bus — check wiring: "
+              "SDA=GPIO4, SCL=GPIO5, VCC=3V3, GND=GND.")
+        return None
+    try:
+        return ssd1306.SSD1306_I2C(OLED_WIDTH, OLED_HEIGHT, i2c, addr=addr)
+    except OSError as e:
+        print("OLED found at", hex(addr), "but failed to initialize:", e)
+        return None
+
+
+oled = init_oled()
 
 np = neopixel.NeoPixel(Pin(LED_PIN), NUM_LEDS)
 
@@ -64,14 +84,15 @@ def focus_color(attention):
 
 
 def show_reading(attention, meditation):
-    oled.fill(0)
-    oled.text("MindWave", 0, 0)
-    oled.text("-" * 16, 0, 10)
-    oled.text("Focus", 0, 26)
-    oled.text(str(attention), 84, 26)
-    oled.text("Calm", 0, 44)
-    oled.text(str(meditation), 84, 44)
-    oled.show()
+    if oled:
+        oled.fill(0)
+        oled.text("MindWave", 0, 0)
+        oled.text("-" * 16, 0, 10)
+        oled.text("Focus", 0, 26)
+        oled.text(str(attention), 84, 26)
+        oled.text("Calm", 0, 44)
+        oled.text(str(meditation), 84, 44)
+        oled.show()
 
     color = focus_color(attention)
     for i in range(NUM_LEDS):
@@ -80,11 +101,12 @@ def show_reading(attention, meditation):
 
 
 def show_waiting(msg):
-    oled.fill(0)
-    oled.text("MindWave", 0, 0)
-    oled.text("-" * 16, 0, 10)
-    oled.text(msg, 0, 30)
-    oled.show()
+    if oled:
+        oled.fill(0)
+        oled.text("MindWave", 0, 0)
+        oled.text("-" * 16, 0, 10)
+        oled.text(msg, 0, 30)
+        oled.show()
     for i in range(NUM_LEDS):
         np[i] = (0, 0, 20)  # dim blue = idle/no data yet
     np.write()
