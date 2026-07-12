@@ -8,6 +8,11 @@ focused (high attention), red = calm (high meditation), amber/yellow
 when both are elevated. pico/main.py never needs to change — all
 three data sources below feed it the same "A:xx,M:xx" format.
 
+Also acts as a light study coach in this script's own console: if
+you've been more "red" (calm) than focused for 5 of the last minutes,
+it suggests a short break (with a beep), and it prints an encouraging
+line roughly once a minute. See BREAK_* / MOTIVATION_* below to tune.
+
 Three data sources, chosen with --source (openvibe is the default —
 just run the script with no flags to use OpenViBE):
 
@@ -57,6 +62,7 @@ REQUIREMENTS:
 
 import argparse
 import json
+import random
 import socket
 import threading
 import time
@@ -73,6 +79,23 @@ SEND_EVERY  = 0.5   # seconds between updates sent to the Pico
 PICO_VID    = 0x2E8A  # Raspberry Pi Foundation's USB vendor ID
 LSL_WINDOW_SECONDS = 2.0   # how much raw EEG history to use for band power estimation
 LSL_STREAM_NAME = "openvibeSignal"  # OpenViBE's LSL Export box default "Signal stream" name
+
+# ── Study coach ───────────────────────────────────────────────────────────────
+BREAK_WINDOW_SECONDS    = 300   # look back 5 minutes for the break check
+BREAK_RED_FRACTION      = 0.7   # break suggested once >=70% of that window was "red" (calm > focus)
+BREAK_COOLDOWN_SECONDS  = 300   # don't suggest another break for 5 minutes after one fires
+MOTIVATION_EVERY_SECONDS = 60   # roughly how often to print an encouragement line
+
+MOTIVATIONAL_MESSAGES = [
+    "You're doing great — keep going!",
+    "Small steps add up. Stay with it.",
+    "Your focus is building momentum.",
+    "One page at a time. You've got this.",
+    "Progress, not perfection.",
+    "Stay with it — future you will thank you.",
+    "Nice work staying at it. Keep pushing.",
+    "You're closer than you think. Keep going.",
+]
 # ──────────────────────────────────────────────────────────────────────────────
 
 state = dict(attention=0, meditation=0, connected=False)
@@ -381,6 +404,10 @@ def main():
 
     ser, port = connect_serial()
 
+    red_window = deque(maxlen=max(int(BREAK_WINDOW_SECONDS / SEND_EVERY), 1))
+    last_break_suggestion = 0.0
+    last_motivation = time.monotonic()
+
     try:
         while True:
             with lock:
@@ -391,6 +418,28 @@ def main():
             except serial.SerialException as e:
                 print(f"\nLost connection to Pico ({e}) — reconnecting...")
                 ser, port = connect_serial(port)
+
+            now = time.monotonic()
+
+            red_window.append(med > att)
+            if len(red_window) == red_window.maxlen:
+                red_fraction = sum(red_window) / len(red_window)
+                if (red_fraction >= BREAK_RED_FRACTION
+                        and now - last_break_suggestion >= BREAK_COOLDOWN_SECONDS):
+                    print(f"\n\U0001F9D8 You've been more calm than focused for the last "
+                          f"{int(BREAK_WINDOW_SECONDS / 60)} minutes — maybe take a short break!\n")
+                    try:
+                        import winsound
+                        winsound.Beep(880, 300)
+                    except Exception:
+                        pass
+                    last_break_suggestion = now
+                    red_window.clear()
+
+            if now - last_motivation >= MOTIVATION_EVERY_SECONDS:
+                print(f"\n\U0001F4AA {random.choice(MOTIVATIONAL_MESSAGES)}\n")
+                last_motivation = now
+
             time.sleep(SEND_EVERY)
     except KeyboardInterrupt:
         print("\nStopping.")
