@@ -345,6 +345,16 @@ def openvibe_thread(stream_name=None):
                 state["connected"] = False
             time.sleep(3)
 
+# ── Study coach output ─────────────────────────────────────────────────────────
+def coach_print(body, emoji=""):
+    """Print a study-coach line, always flushed immediately (so it can't
+    sit invisible in a stdout buffer), falling back to plain text if the
+    console's codepage can't encode the emoji prefix."""
+    try:
+        print(f"\n{emoji}{body}\n", flush=True)
+    except UnicodeEncodeError:
+        print(f"\n{body}\n", flush=True)
+
 # ── Pico serial link ──────────────────────────────────────────────────────────
 def find_pico_port():
     """Look for a USB serial port that looks like a Raspberry Pi Pico."""
@@ -426,8 +436,9 @@ def main():
                 red_fraction = sum(red_window) / len(red_window)
                 if (red_fraction >= BREAK_RED_FRACTION
                         and now - last_break_suggestion >= BREAK_COOLDOWN_SECONDS):
-                    print(f"\n\U0001F9D8 You've been more calm than focused for the last "
-                          f"{int(BREAK_WINDOW_SECONDS / 60)} minutes — maybe take a short break!\n")
+                    coach_print(f"You've been more calm than focused for the last "
+                                f"{int(BREAK_WINDOW_SECONDS / 60)} minutes — maybe take a short break!",
+                                emoji="\U0001F9D8 ")
                     try:
                         import winsound
                         winsound.Beep(880, 300)
@@ -437,7 +448,7 @@ def main():
                     red_window.clear()
 
             if now - last_motivation >= MOTIVATION_EVERY_SECONDS:
-                print(f"\n\U0001F4AA {random.choice(MOTIVATIONAL_MESSAGES)}\n")
+                coach_print(random.choice(MOTIVATIONAL_MESSAGES), emoji="\U0001F4AA ")
                 last_motivation = now
 
             time.sleep(SEND_EVERY)
