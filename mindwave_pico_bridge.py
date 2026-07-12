@@ -1,33 +1,56 @@
 """
 mindwave_pico_bridge.py  ── streams live focus/calm to a Raspberry Pi Pico
 ================================================
-Connects to ThinkGear Connector (same approach as mindwave_dashboard.py
-and mindwave_logger.py, NO OpenViBE needed) and forwards attention +
-meditation over a USB cable to a Raspberry Pi Pico running pico/main.py,
-which shows the numbers on a 128x64 SSD1306 OLED and color-codes a
-WS2812B/NeoPixel strip by focus (attention) level: red = low, amber =
-mid, green = high.
+Forwards attention + meditation over a USB cable to a Raspberry Pi Pico
+running pico/main.py, which shows the numbers on a 128x32 SSD1306 OLED
+and color-codes a WS2812B/NeoPixel strip by focus (attention) level:
+red = low, amber = mid, green = high. pico/main.py never needs to
+change — both data sources below feed it the same "A:xx,M:xx" format.
+
+Two data sources, chosen with --source:
+
+  thinkgear (default)
+      Connects to ThinkGear Connector directly (same approach as
+      mindwave_dashboard.py / mindwave_logger.py, NO OpenViBE needed)
+      and uses NeuroSky's real eSense attention/meditation values.
+
+  openvibe
+      Connects to an OpenViBE Acquisition Server via Lab Streaming
+      Layer (LSL) instead. OpenViBE doesn't calculate eSense
+      attention/meditation itself — that's NeuroSky's proprietary
+      algorithm — so this mode computes an approximate focus/calm
+      proxy locally from raw EEG band power (beta dominance ~ focus,
+      alpha dominance ~ calm). It's a reasonable stand-in, not the
+      real thing.
+      In OpenViBE, enable an LSL export of the EEG stream — either
+      Acquisition Server's own LSL output option if your version has
+      one, or a Designer scenario with an "LSL Export" box.
 
 This is a separate, minimal app — mindwave_dashboard.py and
 mindwave_logger.py are untouched.
 
-REQUIREMENTS: pyserial  (pip install pyserial)
+REQUIREMENTS:
+  pip install pyserial                 (always)
+  pip install pylsl numpy scipy        (only for --source openvibe)
 """
 
+import argparse
 import json
 import socket
 import threading
 import time
+from collections import deque
 
 import serial
 import serial.tools.list_ports
 
 # ── Config ────────────────────────────────────────────────────────────────────
-TG_HOST    = "127.0.0.1"
-TG_PORT    = 13854
-BAUD_RATE  = 115200
-SEND_EVERY = 0.5   # seconds between updates sent to the Pico
-PICO_VID   = 0x2E8A  # Raspberry Pi Foundation's USB vendor ID
+TG_HOST     = "127.0.0.1"
+TG_PORT     = 13854
+BAUD_RATE   = 115200
+SEND_EVERY  = 0.5   # seconds between updates sent to the Pico
+PICO_VID    = 0x2E8A  # Raspberry Pi Foundation's USB vendor ID
+LSL_WINDOW_SECONDS = 2.0   # how much raw EEG history to use for band power estimation
 # ──────────────────────────────────────────────────────────────────────────────
 
 state = dict(attention=0, meditation=0, connected=False)
@@ -87,6 +110,68 @@ def thinkgear_thread():
                 try: sock.close()
                 except Exception: pass
 
+# ── OpenViBE thread — pulls raw EEG via LSL, estimates focus/calm locally ────
+def openvibe_thread():
+    try:
+        import numpy as np
+        from scipy.signal import welch
+        from pylsl import resolve_byprop, StreamInlet
+    except ImportError as e:
+        print(f"--source openvibe needs extra packages: {e}")
+        print("Install them with: pip install pylsl numpy scipy")
+        return
+
+    def band_power(freqs, power, lo, hi):
+        mask = (freqs >= lo) & (freqs < hi)
+        return float(power[mask].sum()) if mask.any() else 0.0
+
+    while True:
+        print("Looking for an OpenViBE EEG stream via LSL...")
+        streams = resolve_byprop("type", "EEG", timeout=5)
+        if not streams:
+            print("No LSL EEG stream found. In OpenViBE, make sure Acquisition Server is "
+                  "running with an LSL export enabled (or a Designer scenario with an "
+                  "'LSL Export' box) — retrying in 5s...")
+            with lock:
+                state["connected"] = False
+            time.sleep(5)
+            continue
+
+        inlet = StreamInlet(streams[0])
+        info = inlet.info()
+        fs = info.nominal_srate() or 128.0
+        print(f"Connected to LSL stream '{info.name()}' "
+              f"({info.channel_count()} channel(s), {fs:.0f} Hz)")
+        with lock:
+            state["connected"] = True
+
+        window_len = max(int(fs * LSL_WINDOW_SECONDS), 32)
+        buf = deque(maxlen=window_len)
+
+        try:
+            while True:
+                sample, _timestamp = inlet.pull_sample(timeout=1.0)
+                if sample is None:
+                    continue
+                buf.append(sample[0])  # channel 0 = raw EEG
+                if len(buf) < window_len:
+                    continue
+
+                freqs, power = welch(np.array(buf), fs=fs, nperseg=min(256, len(buf)))
+                theta = band_power(freqs, power, 4, 8)
+                alpha = band_power(freqs, power, 8, 12)
+                beta  = band_power(freqs, power, 13, 30)
+                total = theta + alpha + beta + 1e-9
+
+                with lock:
+                    state["attention"]  = max(0, min(100, int(100 * beta  / total)))
+                    state["meditation"] = max(0, min(100, int(100 * alpha / total)))
+        except Exception as e:
+            print(f"OpenViBE/LSL stream error: {e} — reconnecting...")
+            with lock:
+                state["connected"] = False
+            time.sleep(3)
+
 # ── Pico serial link ──────────────────────────────────────────────────────────
 def find_pico_port():
     """Look for a USB serial port that looks like a Raspberry Pi Pico."""
@@ -114,11 +199,22 @@ def connect_serial(preferred_port=None):
             time.sleep(3)
 
 def main():
-    th = threading.Thread(target=thinkgear_thread, daemon=True)
-    th.start()
-    print("Waiting for ThinkGear Connector on port 13854...")
-    print("Do NOT open OpenViBE — it blocks the connection.")
-    print("Put headset on and wait for blue light.\n")
+    parser = argparse.ArgumentParser(description="Stream live focus/calm to a Raspberry Pi Pico.")
+    parser.add_argument("--source", choices=["thinkgear", "openvibe"], default="thinkgear",
+                         help="Where to get EEG data from (default: thinkgear)")
+    args = parser.parse_args()
+
+    if args.source == "thinkgear":
+        th = threading.Thread(target=thinkgear_thread, daemon=True)
+        th.start()
+        print("Waiting for ThinkGear Connector on port 13854...")
+        print("Do NOT open OpenViBE — it blocks the connection.")
+        print("Put headset on and wait for blue light.\n")
+    else:
+        th = threading.Thread(target=openvibe_thread, daemon=True)
+        th.start()
+        print("Using OpenViBE via LSL. Focus/calm are an approximate proxy computed from")
+        print("raw EEG band power, not NeuroSky's real eSense attention/meditation.\n")
 
     ser, port = connect_serial()
 
