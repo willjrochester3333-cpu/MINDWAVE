@@ -16,6 +16,13 @@
 # Pico W or Pico 2 W (the plain Pico has no wireless hardware). Delete
 # wifi_secrets.py from the Pico to go back to USB.
 #
+# WiFi mode shows its progress on the OLED at every stage — "wifi N/20"
+# while joining your network, then its own IP address once joined, then
+# "link N" while reaching the laptop and completing a handshake (proves
+# it's really talking to mindwave_pico_bridge.py, not just any listener
+# on that port), and finally "waiting..." once genuinely connected. If
+# it's stuck, whatever's on screen says exactly which stage failed.
+#
 # WIRING
 # ------
 # OLED (SSD1306, I2C):
@@ -184,33 +191,57 @@ def parse_line(line):
 
 
 # ── Link setup: USB serial by default, WiFi if wifi_secrets.py is present ────
+HANDSHAKE = b"MWHELLO"
+
 def connect_wifi():
     import network
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.connect(wifi_secrets.WIFI_SSID, wifi_secrets.WIFI_PASSWORD)
     print("Connecting to WiFi:", wifi_secrets.WIFI_SSID)
-    for _ in range(20):
+    for attempt in range(20):
         if wlan.isconnected():
-            print("WiFi connected, IP:", wlan.ifconfig()[0])
+            ip = wlan.ifconfig()[0]
+            print("WiFi connected, IP:", ip)
+            show_waiting(ip)  # IPv4 is at most 15 chars, fits the 16-char-wide line
+            time.sleep_ms(1500)
             return wlan
+        show_waiting("wifi {}/20".format(attempt + 1))
         time.sleep(1)
     print("WiFi connection timed out")
     return None
 
 
 def connect_to_laptop():
+    """Open a TCP connection to the laptop AND verify it's actually the
+    bridge script on the other end with a handshake — a bare connect()
+    can report success on some network stacks even when nothing valid
+    is really listening, which would otherwise show a false "waiting"
+    state forever with no data ever arriving."""
     import socket
+    attempt = 0
     while True:
+        attempt += 1
+        show_waiting("link {}".format(attempt))
+        s = None
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(5)
             s.connect((wifi_secrets.LAPTOP_HOST, wifi_secrets.LAPTOP_PORT))
+            s.sendall(HANDSHAKE)
+            reply = s.recv(16)
+            if reply != HANDSHAKE:
+                raise OSError("bad handshake reply: {}".format(reply))
             s.settimeout(None)
             print("Connected to laptop at", wifi_secrets.LAPTOP_HOST)
             return s
         except OSError as e:
             print("Couldn't reach the laptop:", e, "- retrying in 3s...")
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
             time.sleep(3)
 
 

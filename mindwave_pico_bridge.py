@@ -427,9 +427,18 @@ class SerialPicoLink:
     def close(self):
         self.ser.close()
 
+WIFI_HANDSHAKE = b"MWHELLO"
+
 class WifiPicoLink:
     """Talks to the Pico over WiFi — runs a small TCP server and waits for
-    the Pico (configured with pico/wifi_secrets.py) to connect in."""
+    the Pico (configured with pico/wifi_secrets.py) to connect in.
+
+    Every accepted connection must complete a short handshake before
+    being treated as the real Pico link. A bare TCP accept() can succeed
+    for connections that aren't actually the bridge's intended peer (a
+    port scanner, a stale reconnect attempt, etc.), which would
+    otherwise make this script think it's connected while nothing
+    useful is actually happening."""
 
     def __init__(self, listen_port):
         self.listen_port = listen_port
@@ -443,8 +452,25 @@ class WifiPicoLink:
     def _accept(self):
         print(f"Waiting for the Pico to connect on port {self.listen_port} "
               f"(make sure pico/wifi_secrets.py has this machine's IP)...", flush=True)
-        self.conn, addr = self.srv.accept()
-        print(f"Pico connected from {addr[0]}", flush=True)
+        while True:
+            conn, addr = self.srv.accept()
+            try:
+                conn.settimeout(5)
+                hello = conn.recv(16)
+                if hello != WIFI_HANDSHAKE:
+                    raise OSError(f"bad handshake: {hello!r}")
+                conn.sendall(WIFI_HANDSHAKE)
+                conn.settimeout(None)
+            except OSError as e:
+                print(f"Rejected a connection from {addr[0]} ({e}) — still waiting...", flush=True)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+            self.conn = conn
+            print(f"Pico connected from {addr[0]}", flush=True)
+            return
 
     def write(self, data):
         try:
