@@ -567,7 +567,13 @@ class BlePicoLink:
         try:
             for i in range(0, len(data), BLE_CHUNK_SIZE):
                 chunk = data[i:i + BLE_CHUNK_SIZE]
-                self._run(self._client.write_gatt_char(BLE_UART_RX_UUID, chunk, response=False), timeout=5)
+                # response=True: the Pico's RX characteristic is declared with
+                # bluetooth.FLAG_WRITE only (an acknowledged "Write Request"),
+                # not FLAG_WRITE_NO_RESPONSE — using response=False here was a
+                # type mismatch against what the characteristic actually
+                # supports, which is the likely cause of writes appearing to
+                # succeed once and then the connection dropping right after.
+                self._run(self._client.write_gatt_char(BLE_UART_RX_UUID, chunk, response=True), timeout=5)
         except Exception as e:
             print(f"\nLost Bluetooth connection ({e}) — reconnecting...", flush=True)
             try:
