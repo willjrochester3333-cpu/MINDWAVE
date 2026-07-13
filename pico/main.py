@@ -9,12 +9,17 @@
 # line, which mindwave_pico_bridge.py sends each time its study coach
 # prints one.
 #
-# CONNECTION: USB serial by default. If a wifi_secrets.py file (see
-# wifi_secrets.py.example) is also saved on the Pico, this switches to
-# WiFi instead — connects out to mindwave_pico_bridge.py running with
-# --link wifi over your WiFi network, no cable needed. Requires a
-# Pico W or Pico 2 W (the plain Pico has no wireless hardware). Delete
-# wifi_secrets.py from the Pico to go back to USB.
+# CONNECTION: checks for config files on the Pico in this order —
+#   1. ble_secrets.py  -> Bluetooth (BLE), see ble_secrets.py.example
+#   2. wifi_secrets.py -> WiFi, see wifi_secrets.py.example
+#   3. neither present -> USB serial (the original, simplest option)
+# Both wireless modes need a Pico W or Pico 2 W (the plain Pico has no
+# wireless hardware). Delete a config file to fall back to the next
+# option down the list.
+#
+# Bluetooth mode advertises as "MindWave" (a standard BLE UART/Nordic
+# UART Service peripheral) and mindwave_pico_bridge.py --link bluetooth
+# scans for and connects to it — no password or IP address needed.
 #
 # WiFi mode shows its progress on the OLED at every stage — "wifi N/20"
 # while joining your network, then its own IP address once joined, then
@@ -47,7 +52,8 @@
 # -----
 # Copy this file AND ssd1306.py onto the Pico (e.g. with Thonny) as
 # main.py and ssd1306.py so it runs automatically whenever the Pico is
-# powered on or plugged into USB.
+# powered on or plugged into USB. Add ble_secrets.py or wifi_secrets.py
+# (filled in from the matching .example file) for wireless.
 
 import sys
 import select
@@ -57,10 +63,19 @@ import neopixel
 import ssd1306
 
 try:
+    import ble_secrets
+    BLE_ENABLED = True
+except ImportError:
+    BLE_ENABLED = False
+
+try:
     import wifi_secrets
     WIFI_ENABLED = True
 except ImportError:
     WIFI_ENABLED = False
+
+if BLE_ENABLED:
+    WIFI_ENABLED = False  # ble_secrets.py takes priority if both are present
 
 # ── Config ──────────────────────────────────────────────────────────────────
 NUM_LEDS     = 15     # how many LEDs are on the strip
@@ -190,26 +205,109 @@ def parse_line(line):
     return attention, meditation
 
 
-# ── Link setup: USB serial by default, WiFi if wifi_secrets.py is present ────
+# ── Link setup: USB serial by default, WiFi/Bluetooth if configured ──────────
 HANDSHAKE = b"MWHELLO"
 
+# ── Bluetooth (BLE) — Nordic UART Service, a standard/widely-supported
+# pattern for serial-like data over BLE. RX = laptop writes to us; TX is
+# kept for compatibility with generic "BLE UART" phone apps (useful for
+# testing this independently of mindwave_pico_bridge.py) but unused by
+# our own protocol, since data only ever flows laptop -> Pico.
+if BLE_ENABLED:
+    import bluetooth
+    from micropython import const
+
+    _IRQ_CENTRAL_CONNECT = const(1)
+    _IRQ_CENTRAL_DISCONNECT = const(2)
+    _IRQ_GATTS_WRITE = const(3)
+
+    _UART_SERVICE_UUID = bluetooth.UUID("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
+    _UART_TX_UUID = bluetooth.UUID("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+    _UART_RX_UUID = bluetooth.UUID("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
+    _UART_TX = (_UART_TX_UUID, bluetooth.FLAG_NOTIFY)
+    _UART_RX = (_UART_RX_UUID, bluetooth.FLAG_WRITE)
+    _UART_SERVICE = (_UART_SERVICE_UUID, (_UART_TX, _UART_RX))
+
+    class BLEUARTPeripheral:
+        def __init__(self, name):
+            self._ble = bluetooth.BLE()
+            self._ble.active(True)
+            self._ble.irq(self._irq)
+            ((self._tx_handle, self._rx_handle),) = self._ble.gatts_register_services((_UART_SERVICE,))
+            self._connections = set()
+            self._rx_buffer = b""
+            self._payload = self._advertising_payload(name)
+            self._advertise()
+
+        def _irq(self, event, data):
+            if event == _IRQ_CENTRAL_CONNECT:
+                conn_handle, _, _ = data
+                self._connections.add(conn_handle)
+            elif event == _IRQ_CENTRAL_DISCONNECT:
+                conn_handle, _, _ = data
+                self._connections.discard(conn_handle)
+                self._advertise()
+            elif event == _IRQ_GATTS_WRITE:
+                conn_handle, value_handle = data
+                if value_handle == self._rx_handle:
+                    self._rx_buffer += self._ble.gatts_read(self._rx_handle)
+
+        def any(self):
+            return len(self._rx_buffer) > 0
+
+        def read(self):
+            buf = self._rx_buffer
+            self._rx_buffer = b""
+            return buf
+
+        def is_connected(self):
+            return len(self._connections) > 0
+
+        def _advertising_payload(self, name):
+            payload = bytearray()
+
+            def _append(adv_type, value):
+                nonlocal payload
+                payload += bytes((len(value) + 1, adv_type)) + value
+
+            _append(0x01, bytes([0x06]))       # flags: general discoverable, BLE-only
+            _append(0x09, name.encode())        # complete local name
+            _append(0x07, bytes(_UART_SERVICE_UUID))  # complete 128-bit service UUID list
+            return payload
+
+        def _advertise(self, interval_us=500000):
+            self._ble.gap_advertise(interval_us, adv_data=self._payload)
+
 def connect_wifi():
-    import network
-    wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
-    wlan.connect(wifi_secrets.WIFI_SSID, wifi_secrets.WIFI_PASSWORD)
-    print("Connecting to WiFi:", wifi_secrets.WIFI_SSID)
-    for attempt in range(20):
-        if wlan.isconnected():
-            ip = wlan.ifconfig()[0]
-            print("WiFi connected, IP:", ip)
-            show_waiting(ip)  # IPv4 is at most 15 chars, fits the 16-char-wide line
-            time.sleep_ms(1500)
-            return wlan
-        show_waiting("wifi {}/20".format(attempt + 1))
-        time.sleep(1)
-    print("WiFi connection timed out")
-    return None
+    # Each step gets its own on-screen status, and the whole thing is
+    # wrapped in a try/except: if any of these calls raise instead of
+    # just being slow, the OLED would otherwise freeze on the last
+    # message it drew with no visible sign anything went wrong.
+    try:
+        show_waiting("wifi init")
+        import network
+        wlan = network.WLAN(network.STA_IF)
+        show_waiting("wifi active")
+        wlan.active(True)
+        show_waiting("wifi join")
+        wlan.connect(wifi_secrets.WIFI_SSID, wifi_secrets.WIFI_PASSWORD)
+        print("Connecting to WiFi:", wifi_secrets.WIFI_SSID)
+        for attempt in range(20):
+            if wlan.isconnected():
+                ip = wlan.ifconfig()[0]
+                print("WiFi connected, IP:", ip)
+                show_waiting(ip)  # IPv4 is at most 15 chars, fits the 16-char-wide line
+                time.sleep_ms(1500)
+                return wlan
+            show_waiting("wifi {}/20".format(attempt + 1))
+            time.sleep(1)
+        print("WiFi connection timed out")
+        return None
+    except Exception as e:
+        print("WiFi error:", e)
+        show_waiting("wifi err")
+        time.sleep_ms(1500)
+        return None
 
 
 def connect_to_laptop():
@@ -249,9 +347,20 @@ _rx_buf = b""
 
 def read_available_lines():
     """Return a list of complete text lines ready right now, from
-    whichever transport is active (USB serial, or a WiFi socket)."""
+    whichever transport is active (Bluetooth, WiFi socket, or USB serial)."""
     global _rx_buf, link_sock, stdin_poll
     lines = []
+
+    if BLE_ENABLED:
+        data = ble.read()
+        if not data:
+            return lines
+        _rx_buf += data
+        while b"\n" in _rx_buf:
+            raw, _rx_buf = _rx_buf.split(b"\n", 1)
+            lines.append(raw.decode("utf-8", "ignore"))
+        return lines
+
     if not WIFI_ENABLED:
         lines.append(sys.stdin.readline())
         return lines
@@ -277,7 +386,23 @@ def read_available_lines():
     return lines
 
 
-if WIFI_ENABLED:
+def has_data_ready():
+    """Block up to ~500ms, return True if there's something to read.
+    BLE data arrives via an IRQ callback in the background regardless of
+    what the main loop is doing, so there's no file descriptor to poll —
+    just wait a moment and check whether anything showed up."""
+    if BLE_ENABLED:
+        time.sleep_ms(500)
+        return ble.any()
+    return stdin_poll.poll(500)
+
+
+if BLE_ENABLED:
+    show_waiting("ble init")
+    ble = BLEUARTPeripheral(ble_secrets.BLE_NAME)
+    show_waiting("ble adv")
+    link_sock = None
+elif WIFI_ENABLED:
     show_waiting("connecting...")
     wlan = connect_wifi()
     while wlan is None:
@@ -287,8 +412,9 @@ if WIFI_ENABLED:
 else:
     link_sock = None
 
-stdin_poll = select.poll()
-stdin_poll.register(link_sock if WIFI_ENABLED else sys.stdin, select.POLLIN)
+if not BLE_ENABLED:
+    stdin_poll = select.poll()
+    stdin_poll.register(link_sock if WIFI_ENABLED else sys.stdin, select.POLLIN)
 
 show_waiting("waiting...")
 last_data_ms = time.ticks_ms()
@@ -296,7 +422,7 @@ last_data_ms = time.ticks_ms()
 showing_no_signal = False
 
 while True:
-    if stdin_poll.poll(500):
+    if has_data_ready():
         for line in read_available_lines():
             if line.startswith("Q:"):
                 show_quote(line[2:].strip())

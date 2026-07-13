@@ -10,15 +10,26 @@ when both are elevated. All three data sources below feed it the same
 
 Reaches the Pico over --link (usb by default):
 
-  usb   Wired over a USB cable — the original, simplest option.
+  usb        Wired over a USB cable — the original, simplest option.
 
-  wifi  Wireless, needs a Pico W or Pico 2 W. This script runs a small
-        TCP server (--wifi-port, default 5005) and waits for the Pico
-        to connect in over your WiFi network — set up pico/wifi_secrets.py
-        on the Pico first (copy pico/wifi_secrets.py.example, fill in your
-        WiFi SSID/password and this machine's local IP, save it onto the
-        Pico). The plain non-W Pico has no wireless hardware and can't
-        use this mode.
+  wifi       Wireless, needs a Pico W or Pico 2 W. This script runs a
+             small TCP server (--wifi-port, default 5005) and waits for
+             the Pico to connect in over your WiFi network — set up
+             pico/wifi_secrets.py on the Pico first (copy
+             pico/wifi_secrets.py.example, fill in your WiFi SSID/
+             password and this machine's local IP, save it onto the
+             Pico).
+
+  bluetooth  Wireless over Bluetooth Low Energy (BLE) instead — no
+             password or IP address needed, just proximity. Needs a
+             Pico W or Pico 2 W with pico/ble_secrets.py saved on it
+             (copy pico/ble_secrets.py.example). This script scans for
+             a BLE device advertising as "MindWave" (--ble-name to
+             change it) and connects using the standard Nordic UART
+             Service pattern. Needs: pip install bleak
+
+  Both wireless modes need a Pico W or Pico 2 W — the plain non-W Pico
+  has no wireless hardware at all and can only use --link usb.
 
 Also acts as a light study coach in this script's own console: if
 you've been more "red" (calm) than focused for 5 of the last minutes,
@@ -73,6 +84,7 @@ mindwave_logger.py are untouched.
 REQUIREMENTS:
   pip install pyserial                 (always)
   pip install pylsl numpy scipy        (only for --source openvibe)
+  pip install bleak                    (only for --link bluetooth)
 """
 
 import argparse
@@ -95,6 +107,7 @@ PICO_VID    = 0x2E8A  # Raspberry Pi Foundation's USB vendor ID
 LSL_WINDOW_SECONDS = 2.0   # how much raw EEG history to use for band power estimation
 LSL_STREAM_NAME = "openvibeSignal"  # OpenViBE's LSL Export box default "Signal stream" name
 WIFI_PORT = 5005   # TCP port this script listens on for --link wifi
+BLE_DEVICE_NAME = "MindWave"   # must match BLE_NAME in pico/ble_secrets.py
 
 # ── Study coach ───────────────────────────────────────────────────────────────
 BREAK_WINDOW_SECONDS    = 300   # look back 5 minutes for the break check
@@ -493,6 +506,83 @@ class WifiPicoLink:
         except Exception:
             pass
 
+# Nordic UART Service UUIDs — the same standard pattern pico/main.py's
+# BLEUARTPeripheral advertises under.
+BLE_UART_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+BLE_CHUNK_SIZE = 20  # conservative; fits the default BLE ATT MTU without needing to negotiate a larger one
+
+class BlePicoLink:
+    """Talks to the Pico over Bluetooth Low Energy (BLE), scanning for a
+    device advertising the given name and writing to its Nordic UART
+    Service RX characteristic. bleak's API is async, so this runs its
+    own asyncio event loop in a background thread and exposes plain
+    synchronous write()/close() methods to match SerialPicoLink/
+    WifiPicoLink, so the rest of the script doesn't need to care which
+    link type is active."""
+
+    def __init__(self, device_name):
+        try:
+            import asyncio
+            from bleak import BleakClient, BleakScanner
+        except ImportError as e:
+            raise SystemExit(f"--link bluetooth needs the 'bleak' package ({e}). "
+                              f"Install it with: pip install bleak")
+        self._asyncio = asyncio
+        self._BleakClient = BleakClient
+        self._BleakScanner = BleakScanner
+        self.device_name = device_name
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        self._client = None
+        self._connect()
+
+    def _run_loop(self):
+        self._asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run(self, coro, timeout=None):
+        return self._asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    def _connect(self):
+        while True:
+            print(f"Scanning for a Bluetooth device named '{self.device_name}'...", flush=True)
+            try:
+                device = self._run(
+                    self._BleakScanner.find_device_by_name(self.device_name, timeout=10.0), timeout=15)
+                if device is None:
+                    print("Not found — is the Pico powered on and advertising? Retrying...", flush=True)
+                    time.sleep(3)
+                    continue
+                client = self._BleakClient(device)
+                self._run(client.connect(), timeout=15)
+                self._client = client
+                print(f"Connected to '{self.device_name}' over Bluetooth", flush=True)
+                return
+            except Exception as e:
+                print(f"Bluetooth connection failed: {e} — retrying in 3s...", flush=True)
+                time.sleep(3)
+
+    def write(self, data):
+        try:
+            for i in range(0, len(data), BLE_CHUNK_SIZE):
+                chunk = data[i:i + BLE_CHUNK_SIZE]
+                self._run(self._client.write_gatt_char(BLE_UART_RX_UUID, chunk, response=False), timeout=5)
+        except Exception as e:
+            print(f"\nLost Bluetooth connection ({e}) — reconnecting...", flush=True)
+            try:
+                self._run(self._client.disconnect(), timeout=5)
+            except Exception:
+                pass
+            self._connect()
+
+    def close(self):
+        try:
+            self._run(self._client.disconnect(), timeout=5)
+        except Exception:
+            pass
+        self._loop.call_soon_threadsafe(self._loop.stop)
+
 def main():
     arg_parser = argparse.ArgumentParser(description="Stream live focus/calm to a Raspberry Pi Pico.")
     arg_parser.add_argument("--source", choices=["thinkgear", "serial", "openvibe"], default="openvibe",
@@ -504,12 +594,15 @@ def main():
                              help=f"LSL stream name for --source openvibe "
                                   f"(default: '{LSL_STREAM_NAME}', matching OpenViBE's "
                                   f"LSL Export box default)")
-    arg_parser.add_argument("--link", choices=["usb", "wifi"], default="usb",
-                             help="How to reach the Pico (default: usb). wifi needs a "
-                                  "Pico W/2 W with pico/wifi_secrets.py set up on it — "
-                                  "see pico/wifi_secrets.py.example.")
+    arg_parser.add_argument("--link", choices=["usb", "wifi", "bluetooth"], default="usb",
+                             help="How to reach the Pico (default: usb). wifi/bluetooth need a "
+                                  "Pico W/2 W with pico/wifi_secrets.py or pico/ble_secrets.py "
+                                  "set up on it — see the matching .example file.")
     arg_parser.add_argument("--wifi-port", type=int, default=WIFI_PORT,
                              help=f"TCP port to listen on for --link wifi (default: {WIFI_PORT})")
+    arg_parser.add_argument("--ble-name", default=BLE_DEVICE_NAME,
+                             help=f"BLE device name to scan for with --link bluetooth "
+                                  f"(default: '{BLE_DEVICE_NAME}', matching ble_secrets.py.example)")
     args = arg_parser.parse_args()
 
     if args.source == "thinkgear":
@@ -530,7 +623,12 @@ def main():
         print("Using OpenViBE via LSL. Focus/calm are an approximate proxy computed from")
         print("raw EEG band power, not NeuroSky's real eSense attention/meditation.\n")
 
-    link = SerialPicoLink() if args.link == "usb" else WifiPicoLink(args.wifi_port)
+    if args.link == "usb":
+        link = SerialPicoLink()
+    elif args.link == "wifi":
+        link = WifiPicoLink(args.wifi_port)
+    else:
+        link = BlePicoLink(args.ble_name)
 
     red_window = deque(maxlen=max(int(BREAK_WINDOW_SECONDS / SEND_EVERY), 1))
     last_break_suggestion = 0.0

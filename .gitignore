@@ -4,3 +4,7 @@ __pycache__/
 # Real WiFi credentials for the Pico — never commit this. Copy
 # pico/wifi_secrets.py.example to pico/wifi_secrets.py and fill it in.
 pico/wifi_secrets.py
+
+# Your local Bluetooth device name config — copy
+# pico/ble_secrets.py.example to pico/ble_secrets.py instead.
+pico/ble_secrets.py
