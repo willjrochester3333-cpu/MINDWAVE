@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Real WiFi credentials for the Pico — never commit this. Copy
+# pico/wifi_secrets.py.example to pico/wifi_secrets.py and fill it in.
+pico/wifi_secrets.py

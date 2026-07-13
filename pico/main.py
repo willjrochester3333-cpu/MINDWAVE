@@ -1,13 +1,20 @@
-# main.py — runs on the Raspberry Pi Pico
+# main.py — runs on the Raspberry Pi Pico (or Pico W / Pico 2 W)
 # ==========================================
-# Reads "A:<attention>,M:<meditation>\n" lines over USB serial from
-# mindwave_pico_bridge.py (running on the laptop) and shows them on a
-# 128x32 SSD1306 OLED, plus color-codes a WS2812B/NeoPixel strip by
-# blending focus and calm: green = focused (high attention), red =
-# calm (high meditation), amber/yellow = a mix of both. Also shows a
-# motivational quote (word-wrapped) and buzzes a buzzer for a few
-# seconds whenever it receives a "Q:<text>" line, which
-# mindwave_pico_bridge.py sends each time its study coach prints one.
+# Reads "A:<attention>,M:<meditation>\n" lines from mindwave_pico_bridge.py
+# (running on the laptop) and shows them on a 128x32 SSD1306 OLED, plus
+# color-codes a WS2812B/NeoPixel strip by blending focus and calm: green =
+# focused (high attention), red = calm (high meditation), amber/yellow =
+# a mix of both. Also shows a motivational quote (word-wrapped) and
+# buzzes a buzzer for a few seconds whenever it receives a "Q:<text>"
+# line, which mindwave_pico_bridge.py sends each time its study coach
+# prints one.
+#
+# CONNECTION: USB serial by default. If a wifi_secrets.py file (see
+# wifi_secrets.py.example) is also saved on the Pico, this switches to
+# WiFi instead — connects out to mindwave_pico_bridge.py running with
+# --link wifi over your WiFi network, no cable needed. Requires a
+# Pico W or Pico 2 W (the plain Pico has no wireless hardware). Delete
+# wifi_secrets.py from the Pico to go back to USB.
 #
 # WIRING
 # ------
@@ -41,6 +48,12 @@ import time
 from machine import Pin, I2C
 import neopixel
 import ssd1306
+
+try:
+    import wifi_secrets
+    WIFI_ENABLED = True
+except ImportError:
+    WIFI_ENABLED = False
 
 # ── Config ──────────────────────────────────────────────────────────────────
 NUM_LEDS     = 15     # how many LEDs are on the strip
@@ -84,9 +97,6 @@ np = neopixel.NeoPixel(Pin(LED_PIN), NUM_LEDS)
 
 buzzer = Pin(BUZZER_PIN, Pin.OUT)
 buzzer.value(0)
-
-stdin_poll = select.poll()
-stdin_poll.register(sys.stdin, select.POLLIN)
 
 
 def buzz():
@@ -173,6 +183,82 @@ def parse_line(line):
     return attention, meditation
 
 
+# ── Link setup: USB serial by default, WiFi if wifi_secrets.py is present ────
+def connect_wifi():
+    import network
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(wifi_secrets.WIFI_SSID, wifi_secrets.WIFI_PASSWORD)
+    print("Connecting to WiFi:", wifi_secrets.WIFI_SSID)
+    for _ in range(20):
+        if wlan.isconnected():
+            print("WiFi connected, IP:", wlan.ifconfig()[0])
+            return wlan
+        time.sleep(1)
+    print("WiFi connection timed out")
+    return None
+
+
+def connect_to_laptop():
+    import socket
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect((wifi_secrets.LAPTOP_HOST, wifi_secrets.LAPTOP_PORT))
+            s.settimeout(None)
+            print("Connected to laptop at", wifi_secrets.LAPTOP_HOST)
+            return s
+        except OSError as e:
+            print("Couldn't reach the laptop:", e, "- retrying in 3s...")
+            time.sleep(3)
+
+
+_rx_buf = b""
+
+def read_available_lines():
+    """Return a list of complete text lines ready right now, from
+    whichever transport is active (USB serial, or a WiFi socket)."""
+    global _rx_buf, link_sock, stdin_poll
+    lines = []
+    if not WIFI_ENABLED:
+        lines.append(sys.stdin.readline())
+        return lines
+
+    try:
+        data = link_sock.recv(256)
+    except OSError:
+        data = None
+    if not data:
+        print("Lost connection to laptop — reconnecting...")
+        try:
+            link_sock.close()
+        except Exception:
+            pass
+        link_sock = connect_to_laptop()
+        stdin_poll = select.poll()
+        stdin_poll.register(link_sock, select.POLLIN)
+        return lines
+    _rx_buf += data
+    while b"\n" in _rx_buf:
+        raw, _rx_buf = _rx_buf.split(b"\n", 1)
+        lines.append(raw.decode("utf-8", "ignore"))
+    return lines
+
+
+if WIFI_ENABLED:
+    show_waiting("connecting...")
+    wlan = connect_wifi()
+    while wlan is None:
+        time.sleep(5)
+        wlan = connect_wifi()
+    link_sock = connect_to_laptop()
+else:
+    link_sock = None
+
+stdin_poll = select.poll()
+stdin_poll.register(link_sock if WIFI_ENABLED else sys.stdin, select.POLLIN)
+
 show_waiting("waiting...")
 last_data_ms = time.ticks_ms()
 
@@ -180,19 +266,19 @@ showing_no_signal = False
 
 while True:
     if stdin_poll.poll(500):
-        line = sys.stdin.readline()
-        if line.startswith("Q:"):
-            show_quote(line[2:].strip())
-            # a quote line is still proof the link is alive, so don't let the
-            # time spent showing it push us into a false "no signal" state
-            last_data_ms = time.ticks_ms()
-            showing_no_signal = False
-        else:
-            parsed = parse_line(line)
-            if parsed:
+        for line in read_available_lines():
+            if line.startswith("Q:"):
+                show_quote(line[2:].strip())
+                # a quote line is still proof the link is alive, so don't let the
+                # time spent showing it push us into a false "no signal" state
                 last_data_ms = time.ticks_ms()
                 showing_no_signal = False
-                show_reading(*parsed)
+            else:
+                parsed = parse_line(line)
+                if parsed:
+                    last_data_ms = time.ticks_ms()
+                    showing_no_signal = False
+                    show_reading(*parsed)
 
     if not showing_no_signal and time.ticks_diff(time.ticks_ms(), last_data_ms) > DATA_TIMEOUT:
         showing_no_signal = True

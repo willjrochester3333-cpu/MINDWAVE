@@ -1,12 +1,24 @@
 """
 mindwave_pico_bridge.py  ── streams live focus/calm to a Raspberry Pi Pico
 ================================================
-Forwards attention + meditation over a USB cable to a Raspberry Pi Pico
-running pico/main.py, which shows the numbers on a 128x32 SSD1306 OLED
-and color-codes a WS2812B/NeoPixel strip by blending the two: green =
+Forwards attention + meditation to a Raspberry Pi Pico running
+pico/main.py, which shows the numbers on a 128x32 SSD1306 OLED and
+color-codes a WS2812B/NeoPixel strip by blending the two: green =
 focused (high attention), red = calm (high meditation), amber/yellow
 when both are elevated. All three data sources below feed it the same
 "A:xx,M:xx" format.
+
+Reaches the Pico over --link (usb by default):
+
+  usb   Wired over a USB cable — the original, simplest option.
+
+  wifi  Wireless, needs a Pico W or Pico 2 W. This script runs a small
+        TCP server (--wifi-port, default 5005) and waits for the Pico
+        to connect in over your WiFi network — set up pico/wifi_secrets.py
+        on the Pico first (copy pico/wifi_secrets.py.example, fill in your
+        WiFi SSID/password and this machine's local IP, save it onto the
+        Pico). The plain non-W Pico has no wireless hardware and can't
+        use this mode.
 
 Also acts as a light study coach in this script's own console: if
 you've been more "red" (calm) than focused for 5 of the last minutes,
@@ -82,6 +94,7 @@ SEND_EVERY  = 0.5   # seconds between updates sent to the Pico
 PICO_VID    = 0x2E8A  # Raspberry Pi Foundation's USB vendor ID
 LSL_WINDOW_SECONDS = 2.0   # how much raw EEG history to use for band power estimation
 LSL_STREAM_NAME = "openvibeSignal"  # OpenViBE's LSL Export box default "Signal stream" name
+WIFI_PORT = 5005   # TCP port this script listens on for --link wifi
 
 # ── Study coach ───────────────────────────────────────────────────────────────
 BREAK_WINDOW_SECONDS    = 300   # look back 5 minutes for the break check
@@ -398,6 +411,62 @@ def connect_serial(preferred_port=None):
             preferred_port = None
             time.sleep(3)
 
+class SerialPicoLink:
+    """Talks to the Pico over a USB serial cable."""
+
+    def __init__(self):
+        self.ser, self.port = connect_serial()
+
+    def write(self, data):
+        try:
+            self.ser.write(data)
+        except serial.SerialException as e:
+            print(f"\nLost connection to Pico ({e}) — reconnecting...", flush=True)
+            self.ser, self.port = connect_serial(self.port)
+
+    def close(self):
+        self.ser.close()
+
+class WifiPicoLink:
+    """Talks to the Pico over WiFi — runs a small TCP server and waits for
+    the Pico (configured with pico/wifi_secrets.py) to connect in."""
+
+    def __init__(self, listen_port):
+        self.listen_port = listen_port
+        self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("0.0.0.0", listen_port))
+        self.srv.listen(1)
+        self.conn = None
+        self._accept()
+
+    def _accept(self):
+        print(f"Waiting for the Pico to connect on port {self.listen_port} "
+              f"(make sure pico/wifi_secrets.py has this machine's IP)...", flush=True)
+        self.conn, addr = self.srv.accept()
+        print(f"Pico connected from {addr[0]}", flush=True)
+
+    def write(self, data):
+        try:
+            self.conn.sendall(data)
+        except OSError as e:
+            print(f"\nLost connection to Pico ({e}) — waiting for it to reconnect...", flush=True)
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self._accept()
+
+    def close(self):
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        try:
+            self.srv.close()
+        except Exception:
+            pass
+
 def main():
     arg_parser = argparse.ArgumentParser(description="Stream live focus/calm to a Raspberry Pi Pico.")
     arg_parser.add_argument("--source", choices=["thinkgear", "serial", "openvibe"], default="openvibe",
@@ -409,6 +478,12 @@ def main():
                              help=f"LSL stream name for --source openvibe "
                                   f"(default: '{LSL_STREAM_NAME}', matching OpenViBE's "
                                   f"LSL Export box default)")
+    arg_parser.add_argument("--link", choices=["usb", "wifi"], default="usb",
+                             help="How to reach the Pico (default: usb). wifi needs a "
+                                  "Pico W/2 W with pico/wifi_secrets.py set up on it — "
+                                  "see pico/wifi_secrets.py.example.")
+    arg_parser.add_argument("--wifi-port", type=int, default=WIFI_PORT,
+                             help=f"TCP port to listen on for --link wifi (default: {WIFI_PORT})")
     args = arg_parser.parse_args()
 
     if args.source == "thinkgear":
@@ -429,7 +504,7 @@ def main():
         print("Using OpenViBE via LSL. Focus/calm are an approximate proxy computed from")
         print("raw EEG band power, not NeuroSky's real eSense attention/meditation.\n")
 
-    ser, port = connect_serial()
+    link = SerialPicoLink() if args.link == "usb" else WifiPicoLink(args.wifi_port)
 
     red_window = deque(maxlen=max(int(BREAK_WINDOW_SECONDS / SEND_EVERY), 1))
     last_break_suggestion = 0.0
@@ -439,12 +514,8 @@ def main():
         while True:
             with lock:
                 att, med = state["attention"], state["meditation"]
-            try:
-                ser.write(f"A:{att},M:{med}\n".encode("ascii"))
-                print(f"\r→ Pico  focus={att:3d}  calm={med:3d}   ", end="", flush=True)
-            except serial.SerialException as e:
-                print(f"\nLost connection to Pico ({e}) — reconnecting...")
-                ser, port = connect_serial(port)
+            link.write(f"A:{att},M:{med}\n".encode("ascii"))
+            print(f"\r→ Pico  focus={att:3d}  calm={med:3d}   ", end="", flush=True)
 
             now = time.monotonic()
 
@@ -467,17 +538,14 @@ def main():
             if now - last_motivation >= MOTIVATION_EVERY_SECONDS:
                 quote = random.choice(MOTIVATIONAL_MESSAGES)
                 coach_print(quote, emoji="\U0001F4AA ")
-                try:
-                    ser.write(f"Q:{ascii_safe(quote)}\n".encode("ascii"))
-                except serial.SerialException:
-                    pass  # the next A:/M: write will surface and handle any real disconnect
+                link.write(f"Q:{ascii_safe(quote)}\n".encode("ascii"))
                 last_motivation = now
 
             time.sleep(SEND_EVERY)
     except KeyboardInterrupt:
         print("\nStopping.")
     finally:
-        ser.close()
+        link.close()
 
 if __name__ == "__main__":
     main()
