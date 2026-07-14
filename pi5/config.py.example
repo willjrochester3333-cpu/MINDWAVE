@@ -1,0 +1,10 @@
+# config.py.example — copy this file to config.py in this same folder
+# and fill in your laptop's local IP address.
+#
+# Find it on the laptop the same way you would for pico/wifi_secrets.py:
+# on Windows, run `ipconfig` and look for "IPv4 Address" under your WiFi
+# adapter. On the Pi 5 itself, `hostname -I` shows its own IP, which is
+# useful for confirming both devices are on the same network.
+
+LAPTOP_HOST = "192.168.1.100"
+LAPTOP_PORT = 5005   # must match mindwave_pico_bridge.py's --wifi-port (default 5005)
