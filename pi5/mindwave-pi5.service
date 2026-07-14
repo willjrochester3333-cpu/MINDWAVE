@@ -1,0 +1,39 @@
+# mindwave-pi5.service — auto-starts pi5/main.py on every boot, and
+# restarts it automatically if it ever crashes.
+#
+# SETUP
+# -----
+# 1. Edit the two paths below (ExecStart and WorkingDirectory) to match
+#    wherever you actually placed this repo on the Pi, and edit "User="
+#    to match your actual username (check with `whoami` over SSH —
+#    recent Raspberry Pi OS versions no longer default to "pi").
+#
+# 2. Copy this file onto the Pi and install it:
+#      sudo cp mindwave-pi5.service /etc/systemd/system/
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now mindwave-pi5.service
+#
+# 3. Check it's running:
+#      sudo systemctl status mindwave-pi5.service
+#
+# 4. Watch its live output (same prints you'd see running it directly):
+#      journalctl -u mindwave-pi5.service -f
+#
+# From here on, the Pi runs this automatically every time it boots —
+# no SSH needed unless you want to check on it or update the code.
+
+[Unit]
+Description=MindWave Pi 5 display (OLED + LED strip + buzzer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/mindwave/pi5/main.py
+WorkingDirectory=/home/YOUR_USERNAME/mindwave/pi5
+User=YOUR_USERNAME
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

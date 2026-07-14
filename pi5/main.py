@@ -59,6 +59,10 @@ and your laptop's own IP with `ipconfig` (Windows) as before.
 Run it:
     python3 main.py
 
+To have this start automatically on every boot instead (no need to SSH
+in and run it by hand each time), see mindwave-pi5.service in this
+same folder.
+
 On your laptop, run mindwave_pico_bridge.py --link wifi exactly as you
 would for the Pico — this script speaks the identical protocol.
 """
