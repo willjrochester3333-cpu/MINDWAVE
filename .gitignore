@@ -8,7 +8,3 @@ pico/wifi_secrets.py
 # Your local Bluetooth device name config — copy
 # pico/ble_secrets.py.example to pico/ble_secrets.py instead.
 pico/ble_secrets.py
-
-# Your laptop's local IP for the Pi 5 build — copy
-# pi5/config.py.example to pi5/config.py instead.
-pi5/config.py

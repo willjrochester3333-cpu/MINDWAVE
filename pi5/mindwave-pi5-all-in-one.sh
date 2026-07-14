@@ -1,3 +1,98 @@
+#!/usr/bin/env bash
+# mindwave-pi5-all-in-one.sh
+# =============================================================================
+# The ENTIRE Raspberry Pi 5 MindWave display setup in one file. No repo
+# clone, no separate config.py/service files — this one script writes
+# everything it needs and installs itself.
+#
+# STEP 1 — fill in the two values below:
+#   TARGET_USER  -> your Pi username (the one you set in Raspberry Pi Imager)
+#   LAPTOP_IP    -> your laptop's local IP address (ipconfig on Windows)
+#
+# STEP 2 — pick ONE of these two ways to run it:
+#
+#   (A) Zero-touch, no SSH at all:
+#       Right after flashing the SD card with Raspberry Pi Imager (card
+#       still plugged into your laptop, not ejected yet), open the boot
+#       drive and find firstrun.sh (some Imager versions put it at
+#       bootfs/firstrun.sh). Open it in a text editor, and paste this
+#       ENTIRE file's contents in, on their own line(s), directly ABOVE
+#       the line near the end that looks like:
+#           rm -f /boot/firstrun.sh
+#       Save, eject, wire the hardware (see WIRING below), insert the
+#       card into the Pi, and power on. Give it a few minutes — it needs
+#       to download packages before its automatic first reboot. After
+#       that, it's running for good, every boot, no SSH ever needed.
+#
+#   (B) Over SSH, after a normal Imager flash+boot:
+#       Copy this file to the Pi (e.g. `scp mindwave-pi5-all-in-one.sh
+#       yourpi:~/`), SSH in, then:
+#           sudo bash mindwave-pi5-all-in-one.sh
+#       Reboot when it finishes: sudo reboot
+#
+# Either way, on your laptop, run mindwave_pico_bridge.py --link wifi
+# exactly as you would for the Pico — this speaks the identical protocol.
+#
+# WIRING (Raspberry Pi 5, 40-pin header)
+# -----------------------------------------------------------------------
+# OLED (SSD1306, I2C1):      SDA->GPIO2 (pin 3)  SCL->GPIO3 (pin 5)
+#                            VCC->3V3   (pin 1)  GND->GND   (pin 9)
+# WS2812B / NeoPixel strip:  DIN->GPIO10/SPI0 MOSI (pin 19), ~330 ohm
+#                            resistor in series is good practice.
+#                            Use an external 5V supply for more than a
+#                            few LEDs (15 LEDs can draw ~900mA) — share
+#                            its ground with the Pi's GND. The Pi's own
+#                            5V pin (2/4) is fine only for a short strip.
+# Buzzer:                    Signal->GPIO17 (pin 11)  GND->GND (pin 14)
+#
+# NOTE on the LED strip: the Pi 5's RP1 I/O chip broke the traditional
+# PWM+DMA method most WS2812B libraries rely on, so this drives it over
+# SPI instead (adafruit-circuitpython-neopixel-spi). This is the one
+# part that couldn't be tested on real Pi 5 hardware ahead of time — if
+# something doesn't work, it's the first place to look.
+#
+# It's safe to re-run this script — re-running just re-applies the same
+# steps and overwrites its own files with the same content.
+# =============================================================================
+
+# ── Fill these in ───────────────────────────────────────────────────────
+TARGET_USER="pi"            # <-- your Pi username
+LAPTOP_IP="192.168.1.100"   # <-- your laptop's local IP address
+# ─────────────────────────────────────────────────────────────────────────
+
+LOG_FILE="/boot/mindwave-install.log"
+[ -d /boot/firmware ] && LOG_FILE="/boot/firmware/mindwave-install.log"
+
+(
+  set -e
+
+  TARGET_HOME="/home/$TARGET_USER"
+  INSTALL_DIR="$TARGET_HOME/mindwave-pi5"
+
+  echo "== MindWave Pi 5 all-in-one setup =="
+  echo "User: $TARGET_USER   Install dir: $INSTALL_DIR   Laptop IP: $LAPTOP_IP"
+
+  echo "-- Waiting for network --"
+  for i in $(seq 1 60); do
+    ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && break
+    sleep 2
+  done
+
+  echo "-- Enabling I2C and SPI --"
+  raspi-config nonint do_i2c 0
+  raspi-config nonint do_spi 0
+
+  echo "-- Installing system packages --"
+  apt-get update
+  apt-get install -y python3-pip python3-venv i2c-tools
+
+  echo "-- Installing Python packages --"
+  sudo -u "$TARGET_USER" pip install --break-system-packages \
+      luma.oled Pillow adafruit-blinka adafruit-circuitpython-neopixel-spi gpiozero rpi-lgpio
+
+  echo "-- Writing $INSTALL_DIR/main.py --"
+  mkdir -p "$INSTALL_DIR"
+  cat > "$INSTALL_DIR/main.py" <<'PYEOF'
 #!/usr/bin/env python3
 """
 main.py — runs on a Raspberry Pi 5, standing in for the Pico
@@ -12,83 +107,16 @@ Uses the exact same wire protocol and handshake as pico/main.py's WiFi
 mode, so mindwave_pico_bridge.py needs NO changes to talk to this
 instead of a Pico — just run it with --link wifi as usual.
 
-WIRING (Raspberry Pi 5, 40-pin header, fresh assignment — change the
-CONFIG constants below if you wire it differently)
-------------------------------------------------------------------
-OLED (SSD1306, I2C1 — the Pi's standard/dedicated I2C bus):
-    SDA -> GPIO2  (physical pin 3)
-    SCL -> GPIO3  (physical pin 5)
-    VCC -> 3V3    (physical pin 1)
-    GND -> GND    (physical pin 9)
-
-WS2812B / NeoPixel strip (driven over SPI0 — see NOTE below):
-    DIN -> GPIO10 / SPI0 MOSI (physical pin 19) — a ~330 ohm resistor
-           in series is good practice
-    5V  -> an external 5V supply for anything more than a few LEDs;
-           the Pi's 5V pin (physical pin 2/4) is fine for a short strip
-    GND -> GND (shared with the Pi, and with the external supply if used)
-
-Buzzer:
-    Signal -> GPIO17 (physical pin 11)
-    GND    -> GND
-
-NOTE on the LED strip: the Pi 5's newer RP1 I/O chip broke the
-traditional PWM+DMA method most Raspberry Pi WS2812B libraries
-(rpi_ws281x and anything built on it) rely on. This script drives the
-strip over SPI instead (via adafruit-circuitpython-neopixel-spi),
-which sidesteps that problem — SPI's own clock does the precise bit
-timing WS2812B needs instead of PWM/DMA. This is the least-tested part
-of this file; if it doesn't work, that's the first place to look.
-
-SETUP
------
-Zero-touch path — flash once, plug in, power on, done. No SSH needed.
-See firstrun-snippet.sh in this folder: paste it into the firstrun.sh
-that Raspberry Pi Imager generates on the boot partition, and the Pi
-installs everything itself on first boot (clones the repo, runs
-setup.sh, enables the service) before it even finishes booting the
-first time.
-
-Easiest path if you're already SSH'd in — run the installer script
-(does everything below for you: enables I2C/SPI, installs
-dependencies, sets up config.py, installs the auto-start service):
-    cd pi5
-    chmod +x setup.sh
-    ./setup.sh
-    nano config.py    # fill in your laptop's IP address
-    sudo reboot
-
-That's it — main.py will now run automatically on every boot. See
-setup.sh and mindwave-pi5.service in this folder for what it does.
-
-Manual path, if you'd rather do it by hand:
-    sudo raspi-config
-      -> Interface Options -> I2C -> Enable
-      -> Interface Options -> SPI -> Enable
-    sudo reboot
-    pip install luma.oled Pillow adafruit-blinka adafruit-circuitpython-neopixel-spi gpiozero rpi-lgpio
-    cp config.py.example config.py
-    nano config.py    # fill in your laptop's local IP address — check
-                       # with `ip addr` / `hostname -I` on the Pi, and
-                       # your laptop's own IP with `ipconfig` (Windows)
-    python3 main.py
-
-On your laptop, run mindwave_pico_bridge.py --link wifi exactly as you
-would for the Pico — this script speaks the identical protocol.
+Generated by mindwave-pi5-all-in-one.sh — LAPTOP_HOST below was filled
+in from that script's LAPTOP_IP setting.
 """
 
 import socket
 import time
 
-try:
-    import config
-except ImportError:
-    raise SystemExit(
-        "config.py not found. Copy config.py.example to config.py in this "
-        "folder and fill in your laptop's local IP address."
-    )
-
 # ── Config ────────────────────────────────────────────────────────────────────
+LAPTOP_HOST  = "LAPTOP_IP_PLACEHOLDER"
+LAPTOP_PORT  = 5005    # must match mindwave_pico_bridge.py's --wifi-port (default 5005)
 NUM_LEDS     = 15     # how many LEDs are on the strip — match pico/main.py's value
 BUZZER_PIN   = 17
 BUZZ_S       = 0.2    # how long the buzzer sounds for
@@ -269,13 +297,13 @@ def connect_to_laptop():
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(5)
-            s.connect((config.LAPTOP_HOST, config.LAPTOP_PORT))
+            s.connect((LAPTOP_HOST, LAPTOP_PORT))
             s.sendall(HANDSHAKE)
             reply = s.recv(16)
             if reply != HANDSHAKE:
                 raise OSError(f"bad handshake reply: {reply!r}")
             s.settimeout(None)
-            print(f"Connected to laptop at {config.LAPTOP_HOST}")
+            print(f"Connected to laptop at {LAPTOP_HOST}")
             return s
         except OSError as e:
             print(f"Couldn't reach the laptop: {e} — retrying in 3s...")
@@ -350,3 +378,34 @@ def main():
 
 if __name__ == "__main__":
     main()
+PYEOF
+
+  sed -i "s/LAPTOP_IP_PLACEHOLDER/$LAPTOP_IP/" "$INSTALL_DIR/main.py"
+  chown -R "$TARGET_USER:$TARGET_USER" "$INSTALL_DIR"
+
+  echo "-- Installing the auto-start service --"
+  cat > /etc/systemd/system/mindwave-pi5.service <<EOF
+[Unit]
+Description=MindWave Pi 5 display (OLED + LED strip + buzzer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $INSTALL_DIR/main.py
+WorkingDirectory=$INSTALL_DIR
+User=$TARGET_USER
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now mindwave-pi5.service
+
+  echo "== Done =="
+  echo "Check it's running:   sudo systemctl status mindwave-pi5.service"
+  echo "Watch live output:    journalctl -u mindwave-pi5.service -f"
+) > "$LOG_FILE" 2>&1 || echo "MindWave install hit an error — see $LOG_FILE"
