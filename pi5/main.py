@@ -42,9 +42,16 @@ of this file; if it doesn't work, that's the first place to look.
 
 SETUP
 -----
-Easiest path — run the installer script (does everything below for you:
-enables I2C/SPI, installs dependencies, sets up config.py, installs the
-auto-start service):
+Zero-touch path — flash once, plug in, power on, done. No SSH needed.
+See firstrun-snippet.sh in this folder: paste it into the firstrun.sh
+that Raspberry Pi Imager generates on the boot partition, and the Pi
+installs everything itself on first boot (clones the repo, runs
+setup.sh, enables the service) before it even finishes booting the
+first time.
+
+Easiest path if you're already SSH'd in — run the installer script
+(does everything below for you: enables I2C/SPI, installs
+dependencies, sets up config.py, installs the auto-start service):
     cd pi5
     chmod +x setup.sh
     ./setup.sh
