@@ -1,8 +1,13 @@
 # mindwave-pi5.service — auto-starts pi5/main.py on every boot, and
 # restarts it automatically if it ever crashes.
 #
-# SETUP
-# -----
+# EASIEST PATH: run ./setup.sh in this folder instead — it generates and
+# installs this exact service file automatically with your real paths
+# and username already filled in. Use this file by hand only if you'd
+# rather not run the script.
+#
+# MANUAL SETUP
+# ------------
 # 1. Edit the two paths below (ExecStart and WorkingDirectory) to match
 #    wherever you actually placed this repo on the Pi, and edit "User="
 #    to match your actual username (check with `whoami` over SSH —

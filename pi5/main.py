@@ -42,26 +42,29 @@ of this file; if it doesn't work, that's the first place to look.
 
 SETUP
 -----
-On the Pi 5 (Raspberry Pi OS), enable I2C and SPI first:
+Easiest path — run the installer script (does everything below for you:
+enables I2C/SPI, installs dependencies, sets up config.py, installs the
+auto-start service):
+    cd pi5
+    chmod +x setup.sh
+    ./setup.sh
+    nano config.py    # fill in your laptop's IP address
+    sudo reboot
+
+That's it — main.py will now run automatically on every boot. See
+setup.sh and mindwave-pi5.service in this folder for what it does.
+
+Manual path, if you'd rather do it by hand:
     sudo raspi-config
       -> Interface Options -> I2C -> Enable
       -> Interface Options -> SPI -> Enable
     sudo reboot
-
-Then install dependencies:
     pip install luma.oled Pillow adafruit-blinka adafruit-circuitpython-neopixel-spi gpiozero rpi-lgpio
-
-Copy config.py.example to config.py in this folder and fill in your
-laptop's local IP address (same one you used for pico/wifi_secrets.py,
-if you set that up) — check with `ip addr` or `hostname -I` on the Pi,
-and your laptop's own IP with `ipconfig` (Windows) as before.
-
-Run it:
+    cp config.py.example config.py
+    nano config.py    # fill in your laptop's local IP address — check
+                       # with `ip addr` / `hostname -I` on the Pi, and
+                       # your laptop's own IP with `ipconfig` (Windows)
     python3 main.py
-
-To have this start automatically on every boot instead (no need to SSH
-in and run it by hand each time), see mindwave-pi5.service in this
-same folder.
 
 On your laptop, run mindwave_pico_bridge.py --link wifi exactly as you
 would for the Pico — this script speaks the identical protocol.
