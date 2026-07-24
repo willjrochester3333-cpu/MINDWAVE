@@ -132,6 +132,7 @@ from that script's BLE_NAME setting.
 """
 
 import queue
+import signal
 import threading
 import time
 
@@ -335,7 +336,16 @@ def _handle_write(characteristic, value):
         _incoming_lines.put(raw.decode("utf-8", "ignore"))
 
 
+# Set once the server's up, so a shutdown can cleanly unregister the
+# advertisement instead of leaving BlueZ thinking it's still active — that
+# stale state is the most common cause of a later "failed to register
+# advertisement" error, e.g. after `systemctl restart mindwave-pi5.service`.
+_ble_loop = None
+_ble_server = None
+
+
 async def _run_ble_server():
+    global _ble_server
     server = BlessServer(name=BLE_NAME)
     server.write_request_func = _handle_write
     await server.add_new_service(UART_SERVICE_UUID)
@@ -347,19 +357,43 @@ async def _run_ble_server():
         GATTAttributePermissions.writeable,
     )
     await server.start()
+    _ble_server = server
     print(f"Advertising as '{BLE_NAME}' — waiting for the laptop to connect...", flush=True)
     while True:
         await asyncio.sleep(3600)  # server runs via D-Bus callbacks; just keep the loop alive
 
 
 def start_ble_server():
-    loop = asyncio.new_event_loop()
+    global _ble_loop
+    _ble_loop = asyncio.new_event_loop()
 
     def runner():
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_run_ble_server())
+        asyncio.set_event_loop(_ble_loop)
+        _ble_loop.run_until_complete(_run_ble_server())
 
     threading.Thread(target=runner, daemon=True).start()
+
+
+def stop_ble_server():
+    if _ble_server is None or _ble_loop is None:
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(_ble_server.stop(), _ble_loop).result(timeout=5)
+        print("BLE advertisement stopped cleanly.", flush=True)
+    except Exception as e:
+        print(f"Couldn't cleanly stop the BLE advertisement ({e}) — if the next "
+              f"start fails with 'failed to register advertisement', run: "
+              f"sudo systemctl restart bluetooth", flush=True)
+
+
+def _handle_sigterm(signum, frame):
+    # systemctl stop/restart sends SIGTERM, not SIGINT — turn it into the
+    # same KeyboardInterrupt path so shutdown always cleans up the
+    # advertisement, whether stopped via systemd, Thonny, or Ctrl+C.
+    raise KeyboardInterrupt()
+
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 def main():
@@ -370,27 +404,32 @@ def main():
     last_data = time.monotonic()
     showing_no_signal = False
 
-    while True:
-        try:
-            line = _incoming_lines.get(timeout=0.5)
-        except queue.Empty:
-            line = None
+    try:
+        while True:
+            try:
+                line = _incoming_lines.get(timeout=0.5)
+            except queue.Empty:
+                line = None
 
-        if line is not None:
-            if line.startswith("Q:"):
-                show_quote(line[2:].strip())
-                last_data = time.monotonic()
-                showing_no_signal = False
-            else:
-                parsed = parse_line(line)
-                if parsed:
+            if line is not None:
+                if line.startswith("Q:"):
+                    show_quote(line[2:].strip())
                     last_data = time.monotonic()
                     showing_no_signal = False
-                    show_reading(*parsed)
+                else:
+                    parsed = parse_line(line)
+                    if parsed:
+                        last_data = time.monotonic()
+                        showing_no_signal = False
+                        show_reading(*parsed)
 
-        if not showing_no_signal and time.monotonic() - last_data > DATA_TIMEOUT_S:
-            showing_no_signal = True
-            show_waiting("no signal")
+            if not showing_no_signal and time.monotonic() - last_data > DATA_TIMEOUT_S:
+                showing_no_signal = True
+                show_waiting("no signal")
+    except KeyboardInterrupt:
+        print("Stopping...", flush=True)
+    finally:
+        stop_ble_server()
 
 
 if __name__ == "__main__":
