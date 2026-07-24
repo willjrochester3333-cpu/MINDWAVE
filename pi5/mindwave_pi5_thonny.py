@@ -356,7 +356,22 @@ def _handle_sigterm(signum, frame):
 signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
+def _reset_bluetooth():
+    """Restart the Bluetooth service before advertising. A previous run
+    that got killed rather than shut down cleanly (e.g. Thonny's Stop
+    button) can leave BlueZ still thinking an old advertisement is
+    registered, which then fails the next attempt with 'failed to
+    register advertisement' — this clears that automatically every time,
+    so there's nothing to run by hand."""
+    if os.geteuid() != 0:
+        return
+    print("Resetting Bluetooth...", flush=True)
+    _run(["systemctl", "restart", "bluetooth"])
+    time.sleep(2)
+
+
 def main():
+    _reset_bluetooth()
     show_waiting("starting BLE...")
     start_ble_server()
     show_waiting("waiting...")

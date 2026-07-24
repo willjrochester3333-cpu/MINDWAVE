@@ -133,6 +133,7 @@ from that script's BLE_NAME setting.
 
 import queue
 import signal
+import subprocess
 import threading
 import time
 
@@ -396,7 +397,21 @@ def _handle_sigterm(signum, frame):
 signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
+def _reset_bluetooth():
+    """Restart the Bluetooth service before advertising. A previous run
+    that got killed rather than shut down cleanly can leave BlueZ still
+    thinking an old advertisement is registered, which then fails the
+    next attempt with 'failed to register advertisement' — this clears
+    that automatically every time, so there's nothing to run by hand."""
+    try:
+        subprocess.run(["systemctl", "restart", "bluetooth"])
+    except FileNotFoundError:
+        pass
+    time.sleep(2)
+
+
 def main():
+    _reset_bluetooth()
     show_waiting("starting BLE...")
     start_ble_server()
     show_waiting("waiting...")
