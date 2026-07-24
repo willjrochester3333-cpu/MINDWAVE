@@ -2,12 +2,17 @@
 # mindwave-pi5-all-in-one.sh
 # =============================================================================
 # The ENTIRE Raspberry Pi 5 MindWave display setup in one file. No repo
-# clone, no separate config.py/service files — this one script writes
+# clone, no separate config/service files — this one script writes
 # everything it needs and installs itself.
+#
+# Talks to the laptop over Bluetooth Low Energy (BLE) — the Pi 5 advertises
+# itself as a Nordic UART Service peripheral, exactly like the Pico's BLE
+# firmware does, so mindwave_pico_bridge.py --link bluetooth needs NO
+# changes to talk to this instead of a Pico.
 #
 # STEP 1 — fill in the two values below:
 #   TARGET_USER  -> your Pi username (the one you set in Raspberry Pi Imager)
-#   LAPTOP_IP    -> your laptop's local IP address (ipconfig on Windows)
+#   BLE_NAME     -> must match --ble-name on the laptop (default "MindWave")
 #
 # STEP 2 — pick ONE of these two ways to run it:
 #
@@ -30,8 +35,10 @@
 #           sudo bash mindwave-pi5-all-in-one.sh
 #       Reboot when it finishes: sudo reboot
 #
-# Either way, on your laptop, run mindwave_pico_bridge.py --link wifi
+# Either way, on your laptop, run:
+#     py mindwave_pico_bridge.py --link bluetooth
 # exactly as you would for the Pico — this speaks the identical protocol.
+# No pairing step needed; the laptop just scans for the advertised name.
 #
 # WIRING (Raspberry Pi 5, 40-pin header)
 # -----------------------------------------------------------------------
@@ -44,6 +51,7 @@
 #                            its ground with the Pi's GND. The Pi's own
 #                            5V pin (2/4) is fine only for a short strip.
 # Buzzer:                    Signal->GPIO17 (pin 11)  GND->GND (pin 14)
+# Bluetooth needs no wiring — it's the Pi 5's onboard radio.
 #
 # NOTE on the LED strip: the Pi 5's RP1 I/O chip broke the traditional
 # PWM+DMA method most WS2812B libraries rely on, so this drives it over
@@ -51,13 +59,21 @@
 # part that couldn't be tested on real Pi 5 hardware ahead of time — if
 # something doesn't work, it's the first place to look.
 #
+# NOTE on running as root: registering a BLE GATT peripheral through
+# BlueZ's D-Bus API needs elevated permissions that a regular user
+# doesn't have by default on Raspberry Pi OS, unlike I2C/SPI/GPIO. So,
+# unlike the earlier WiFi version of this script, everything here
+# (package installs and the service) runs as root rather than
+# TARGET_USER — simpler and more reliable than chasing D-Bus/polkit
+# policy edits on a personal project.
+#
 # It's safe to re-run this script — re-running just re-applies the same
 # steps and overwrites its own files with the same content.
 # =============================================================================
 
 # ── Fill these in ───────────────────────────────────────────────────────
-TARGET_USER="pi"            # <-- your Pi username
-LAPTOP_IP="192.168.1.100"   # <-- your laptop's local IP address
+TARGET_USER="pi"         # <-- your Pi username (just used for the install path)
+BLE_NAME="MindWave"      # <-- must match --ble-name on the laptop (default "MindWave")
 # ─────────────────────────────────────────────────────────────────────────
 
 LOG_FILE="/boot/mindwave-install.log"
@@ -66,13 +82,12 @@ LOG_FILE="/boot/mindwave-install.log"
 (
   set -e
 
-  TARGET_HOME="/home/$TARGET_USER"
-  INSTALL_DIR="$TARGET_HOME/mindwave-pi5"
+  INSTALL_DIR="/root/mindwave-pi5"
 
-  echo "== MindWave Pi 5 all-in-one setup =="
-  echo "User: $TARGET_USER   Install dir: $INSTALL_DIR   Laptop IP: $LAPTOP_IP"
+  echo "== MindWave Pi 5 all-in-one setup (Bluetooth) =="
+  echo "Install dir: $INSTALL_DIR   BLE name: $BLE_NAME"
 
-  echo "-- Waiting for network --"
+  echo "-- Waiting for network (needed to download packages) --"
   for i in $(seq 1 60); do
     ping -c1 -W2 8.8.8.8 >/dev/null 2>&1 && break
     sleep 2
@@ -82,13 +97,19 @@ LOG_FILE="/boot/mindwave-install.log"
   raspi-config nonint do_i2c 0
   raspi-config nonint do_spi 0
 
-  echo "-- Installing system packages --"
+  echo "-- Enabling Bluetooth --"
+  rfkill unblock bluetooth || true
   apt-get update
+  apt-get install -y bluez
+
+  echo "-- Installing system packages --"
   apt-get install -y python3-pip python3-venv i2c-tools
 
   echo "-- Installing Python packages --"
-  sudo -u "$TARGET_USER" pip install --break-system-packages \
-      luma.oled Pillow adafruit-blinka adafruit-circuitpython-neopixel-spi gpiozero rpi-lgpio
+  pip install --break-system-packages \
+      luma.oled Pillow adafruit-blinka adafruit-circuitpython-neopixel-spi gpiozero rpi-lgpio bless
+
+  systemctl enable --now bluetooth
 
   echo "-- Writing $INSTALL_DIR/main.py --"
   mkdir -p "$INSTALL_DIR"
@@ -97,26 +118,37 @@ LOG_FILE="/boot/mindwave-install.log"
 """
 main.py — runs on a Raspberry Pi 5, standing in for the Pico
 ================================================
-Connects to mindwave_pico_bridge.py --link wifi (running on your
-laptop) over WiFi, and shows the same "A:<attention>,M:<meditation>"
-readings on an SSD1306 OLED, color-codes a WS2812B/NeoPixel strip by
-blending focus/calm the same way the Pico version does, and buzzes a
-buzzer + shows motivational quotes on "Q:<text>" lines.
+Advertises itself over Bluetooth Low Energy (BLE) as a Nordic UART
+Service peripheral — the exact same service the Pico's BLE firmware
+uses — so mindwave_pico_bridge.py --link bluetooth needs NO changes
+to talk to this instead of a Pico. Shows the same
+"A:<attention>,M:<meditation>" readings on an SSD1306 OLED,
+color-codes a WS2812B/NeoPixel strip by blending focus/calm the same
+way the Pico version does, and buzzes a buzzer + shows motivational
+quotes on "Q:<text>" lines.
 
-Uses the exact same wire protocol and handshake as pico/main.py's WiFi
-mode, so mindwave_pico_bridge.py needs NO changes to talk to this
-instead of a Pico — just run it with --link wifi as usual.
-
-Generated by mindwave-pi5-all-in-one.sh — LAPTOP_HOST below was filled
-in from that script's LAPTOP_IP setting.
+Generated by mindwave-pi5-all-in-one.sh — BLE_NAME below was filled in
+from that script's BLE_NAME setting.
 """
 
-import socket
+import queue
+import threading
 import time
 
+try:
+    import asyncio
+    from bless import (
+        BlessServer,
+        GATTCharacteristicProperties,
+        GATTAttributePermissions,
+    )
+except ImportError as e:
+    raise SystemExit(f"bless not installed ({e}). pip install bless")
+
 # ── Config ────────────────────────────────────────────────────────────────────
-LAPTOP_HOST  = "LAPTOP_IP_PLACEHOLDER"
-LAPTOP_PORT  = 5005    # must match mindwave_pico_bridge.py's --wifi-port (default 5005)
+BLE_NAME     = "BLE_NAME_PLACEHOLDER"   # must match --ble-name on the laptop
+UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+UART_RX_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 NUM_LEDS     = 15     # how many LEDs are on the strip — match pico/main.py's value
 BUZZER_PIN   = 17
 BUZZ_S       = 0.2    # how long the buzzer sounds for
@@ -126,7 +158,6 @@ OLED_WIDTH   = 128
 OLED_HEIGHT  = 32
 DATA_TIMEOUT_S = 5.0   # seconds without a line before we show "no signal"
 BRIGHTNESS   = 0.35    # 0..1, keeps the strip comfortable to look at
-HANDSHAKE    = b"MWHELLO"
 # ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -285,81 +316,67 @@ def parse_line(line):
     return attention, meditation
 
 
-# ── Link: connects to mindwave_pico_bridge.py --link wifi, same protocol ─────
-def connect_to_laptop():
-    """Open a TCP connection to the laptop AND verify it's actually
-    mindwave_pico_bridge.py with the same handshake pico/main.py uses."""
-    attempt = 0
+# ── BLE peripheral (Nordic UART Service, same as pico/main.py's BLE mode) ────
+# Incoming writes land on a background asyncio thread (bless is async-only);
+# they're pushed onto this thread-safe queue as parsed lines, and the main
+# loop below — running on the main thread, same as before — just reads from
+# it, so all the OLED/LED/buzzer calls stay safely single-threaded.
+_incoming_lines = queue.Queue()
+_rx_buffer = bytearray()
+
+
+def _handle_write(characteristic, value):
+    global _rx_buffer
+    characteristic.value = value
+    _rx_buffer += bytes(value)
+    while b"\n" in _rx_buffer:
+        raw, _, rest = _rx_buffer.partition(b"\n")
+        _rx_buffer = bytearray(rest)
+        _incoming_lines.put(raw.decode("utf-8", "ignore"))
+
+
+async def _run_ble_server():
+    server = BlessServer(name=BLE_NAME)
+    server.write_request_func = _handle_write
+    await server.add_new_service(UART_SERVICE_UUID)
+    await server.add_new_characteristic(
+        UART_SERVICE_UUID,
+        UART_RX_CHAR_UUID,
+        GATTCharacteristicProperties.write,
+        None,
+        GATTAttributePermissions.writeable,
+    )
+    await server.start()
+    print(f"Advertising as '{BLE_NAME}' — waiting for the laptop to connect...", flush=True)
     while True:
-        attempt += 1
-        show_waiting(f"link {attempt}")
-        s = None
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)
-            s.connect((LAPTOP_HOST, LAPTOP_PORT))
-            s.sendall(HANDSHAKE)
-            reply = s.recv(16)
-            if reply != HANDSHAKE:
-                raise OSError(f"bad handshake reply: {reply!r}")
-            s.settimeout(None)
-            print(f"Connected to laptop at {LAPTOP_HOST}")
-            return s
-        except OSError as e:
-            print(f"Couldn't reach the laptop: {e} — retrying in 3s...")
-            if s is not None:
-                try:
-                    s.close()
-                except Exception:
-                    pass
-            time.sleep(3)
+        await asyncio.sleep(3600)  # server runs via D-Bus callbacks; just keep the loop alive
 
 
-def read_available_lines(link_sock, rx_buf):
-    """Return (lines, updated_rx_buf, updated_link_sock). A recv() timeout
-    just means nothing arrived in this ~500ms tick — perfectly normal, same
-    as poll(500) returning nothing on the Pico — and must NOT be treated as
-    a lost connection; only a real error or the peer cleanly closing
-    (recv() returning b"") means we should reconnect."""
-    try:
-        data = link_sock.recv(256)
-    except socket.timeout:
-        return [], rx_buf, link_sock
-    except OSError:
-        data = None
+def start_ble_server():
+    loop = asyncio.new_event_loop()
 
-    if not data:
-        print("Lost connection to laptop — reconnecting...")
-        try:
-            link_sock.close()
-        except Exception:
-            pass
-        new_sock = connect_to_laptop()
-        new_sock.settimeout(0.5)
-        return [], b"", new_sock
+    def runner():
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_run_ble_server())
 
-    rx_buf += data
-    lines = []
-    while b"\n" in rx_buf:
-        raw, rx_buf = rx_buf.split(b"\n", 1)
-        lines.append(raw.decode("utf-8", "ignore"))
-    return lines, rx_buf, link_sock
+    threading.Thread(target=runner, daemon=True).start()
 
 
 def main():
-    show_waiting("connecting...")
-    link_sock = connect_to_laptop()
-    link_sock.settimeout(0.5)  # so recv() doubles as our idle tick, like poll(500) on the Pico
-
+    show_waiting("starting BLE...")
+    start_ble_server()
     show_waiting("waiting...")
-    rx_buf = b""
+
     last_data = time.monotonic()
     showing_no_signal = False
 
     while True:
-        lines, rx_buf, link_sock = read_available_lines(link_sock, rx_buf)
+        try:
+            line = _incoming_lines.get(timeout=0.5)
+        except queue.Empty:
+            line = None
 
-        for line in lines:
+        if line is not None:
             if line.startswith("Q:"):
                 show_quote(line[2:].strip())
                 last_data = time.monotonic()
@@ -380,21 +397,20 @@ if __name__ == "__main__":
     main()
 PYEOF
 
-  sed -i "s/LAPTOP_IP_PLACEHOLDER/$LAPTOP_IP/" "$INSTALL_DIR/main.py"
-  chown -R "$TARGET_USER:$TARGET_USER" "$INSTALL_DIR"
+  sed -i "s/BLE_NAME_PLACEHOLDER/$BLE_NAME/" "$INSTALL_DIR/main.py"
 
   echo "-- Installing the auto-start service --"
   cat > /etc/systemd/system/mindwave-pi5.service <<EOF
 [Unit]
-Description=MindWave Pi 5 display (OLED + LED strip + buzzer)
-After=network-online.target
-Wants=network-online.target
+Description=MindWave Pi 5 display (OLED + LED strip + buzzer, over BLE)
+After=bluetooth.target
+Wants=bluetooth.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 $INSTALL_DIR/main.py
 WorkingDirectory=$INSTALL_DIR
-User=$TARGET_USER
+User=root
 Restart=on-failure
 RestartSec=5
 
