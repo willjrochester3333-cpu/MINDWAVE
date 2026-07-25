@@ -1,51 +1,20 @@
 #!/usr/bin/env bash
-# dashboard_all_in_one.sh
-# =============================================================================
-# One file, one run: turns a blank Raspberry Pi 5 + Touch Display 2 into a
-# self-hosted EEG dashboard website.
-#
-# WHAT YOU END UP WITH
-# ---------------------
-# The Pi hosts a website at http://<pi-ip>:8080. Any computer on the same
-# network can open that address in a browser and see a live dashboard. The
-# Pi's own touch display shows the exact same page, full-screen. Pressing
-# "Connect" (from ANY of those screens) makes the Pi itself resolve and pull
-# data straight from whatever OpenViBE LSL stream is broadcasting on the
-# network — there is no laptop-side bridge script in this setup at all.
-#
-# STARTING POINT
-# ---------------
-# A Raspberry Pi 5 freshly flashed with Raspberry Pi Imager, using
-# "Raspberry Pi OS (64-bit) WITH DESKTOP" (not Lite — you need the desktop
-# for the touch display), with OS Customisation set up as usual (hostname,
-# username/password, WiFi, SSH enabled). Boot it, SSH in once, and run this.
-#
-# STEP 1 — fill in the one value below:
-#   TARGET_USER  -> your Pi username (the one you set in Raspberry Pi Imager)
-#
-# STEP 2 — copy this file to the Pi and run it:
+# dashboard_all_in_one.sh — copy to the Pi and run:
 #     scp dashboard_all_in_one.sh yourusername@mindwave-pi.local:~/
 #     ssh yourusername@mindwave-pi.local
 #     sudo bash dashboard_all_in_one.sh
 #     sudo reboot
 #
-# After reboot: the dashboard server starts automatically, the touch
-# display opens it full-screen automatically, and it's reachable from any
-# other computer at the address printed at the end of this script (also
-# visible any time by running `hostname -I` on the Pi).
+# Nothing to edit — it detects your username automatically. After reboot,
+# the touch display shows the dashboard, and any computer on the network
+# can open http://<pi-ip>:8080 to see the same thing live. Just have
+# OpenViBE running on the laptop and press Connect.
 #
-# On the laptop: just have OpenViBE Acquisition Server + Designer running
-# (with an LSL Export box, Play pressed) on the same network as the Pi —
-# that's the only thing that needs to run on the laptop. Nothing to
-# install there for this to work.
-#
-# It's safe to re-run this script — re-running just re-applies the same
-# steps.
-# =============================================================================
+# (Needs "Raspberry Pi OS (64-bit) with Desktop" flashed via Raspberry Pi
+# Imager, not Lite — the touch display needs the desktop.)
 
-# ── Fill this in ─────────────────────────────────────────────────────────
-TARGET_USER="pi"   # <-- your Pi username
-# ────────────────────────────────────────────────────────────────────────
+# Auto-detects whoever ran `sudo` — nothing to edit here.
+TARGET_USER="${SUDO_USER:-pi}"
 
 PORT=8080
 LOG_FILE="/boot/mindwave-install.log"
