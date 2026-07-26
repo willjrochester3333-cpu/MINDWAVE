@@ -47,42 +47,48 @@ def band_power(freqs, power, lo, hi):
     return float(power[mask].sum()) if mask.any() else 0.0
 
 
+def set_status(msg, connected=None):
+    """Update the dashboard's status line AND print it (with flush=True so
+    it shows up immediately in `journalctl -u mindwave-dashboard.service -f`
+    instead of only being visible on the web page)."""
+    with state_lock:
+        state["status"] = msg
+        if connected is not None:
+            state["connected"] = connected
+    print(msg, flush=True)
+
+
 def lsl_worker():
     try:
         import numpy as np
         from scipy.signal import welch
         from pylsl import resolve_byprop, resolve_streams, StreamInlet
     except ImportError as e:
-        with state_lock:
-            state["status"] = f"Missing package: {e}. Install with: pip install pylsl numpy scipy"
+        set_status(f"Missing package: {e}. Install with: pip install pylsl numpy scipy")
         return
 
     while True:
-        with state_lock:
-            state["status"] = f"Looking for an LSL stream named '{LSL_STREAM_NAME}'..."
+        set_status(f"Looking for an LSL stream named '{LSL_STREAM_NAME}'...")
         streams = resolve_byprop("name", LSL_STREAM_NAME, timeout=5)
         if not streams:
             # fall back to whatever LSL stream is available, in case the
             # OpenViBE scenario used a different "Signal stream" name
             streams = resolve_streams(wait_time=2.0)
             if streams:
-                with state_lock:
-                    state["status"] = f"No stream named '{LSL_STREAM_NAME}' — using '{streams[0].name()}' instead."
+                set_status(f"No stream named '{LSL_STREAM_NAME}' — using '{streams[0].name()}' instead.")
         if not streams:
-            with state_lock:
-                state["connected"] = False
-                state["status"] = ("No LSL stream found. Make sure OpenViBE Designer is running a "
-                                    "scenario with an LSL Export box (Play), not just Acquisition "
-                                    "Server. Retrying...")
+            set_status(
+                "No LSL stream found. Make sure OpenViBE Designer is running a scenario with "
+                "an LSL Export box (Play), not just Acquisition Server. Retrying...",
+                connected=False,
+            )
             time.sleep(5)
             continue
 
         inlet = StreamInlet(streams[0])
         info = inlet.info()
         fs = info.nominal_srate() or 128.0
-        with state_lock:
-            state["connected"] = True
-            state["status"] = f"Connected to '{info.name()}' ({info.channel_count()} ch, {fs:.0f} Hz)"
+        set_status(f"Connected to '{info.name()}' ({info.channel_count()} ch, {fs:.0f} Hz)", connected=True)
 
         window_len = max(int(fs * LSL_WINDOW_SECONDS), 32)
         buf = deque(maxlen=window_len)
@@ -106,9 +112,7 @@ def lsl_worker():
                     state["attention"] = max(0, min(100, int(100 * beta / total)))
                     state["meditation"] = max(0, min(100, int(100 * alpha / total)))
         except Exception as e:
-            with state_lock:
-                state["connected"] = False
-                state["status"] = f"Stream error ({e}) — reconnecting..."
+            set_status(f"Stream error ({e}) — reconnecting...", connected=False)
             time.sleep(3)
 
 
